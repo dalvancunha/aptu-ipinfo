@@ -8,18 +8,48 @@
       name="description"
       content="Ferramenta da Aptu para diagnóstico rápido de conexão, IP externo, navegador e dispositivo."
     />
-    <link rel="icon" type="image/x-icon" href="assets/favicon.ico" />
+    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+    <link rel="alternate icon" type="image/x-icon" href="assets/favicon.ico" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main class="container">
-      <header class="header card">
-        <img src="assets/logo-aptu.svg" alt="Logo Aptu" class="logo" />
-        <div>
-          <h1>Diagnóstico de Rede</h1>
-          <p class="subtitle">Ferramenta de apoio ao suporte técnico Aptu</p>
+    <header class="site-header">
+      <div class="header-inner">
+        <div class="brand-block">
+          <picture>
+            <source srcset="assets/logo-aptu-dark.svg" media="(prefers-color-scheme: dark)" />
+            <img src="assets/logo-aptu.svg" alt="Logo Aptu" class="brand-logo" />
+          </picture>
+          <div class="brand-copy">
+            <h1>Diagnóstico de Rede</h1>
+            <p class="subtitle">Ferramenta de apoio ao suporte técnico</p>
+          </div>
         </div>
-      </header>
+        <nav id="headerActions" class="header-actions" aria-label="Ações rápidas">
+          <a
+            id="supportButton"
+            class="button-link whatsapp-button"
+            href="#"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Enviar diagnóstico para o suporte pelo WhatsApp"
+            ><img
+              src="assets/whatsapp.svg"
+              alt=""
+              aria-hidden="true"
+              class="button-icon"
+            /><span>Enviar para o Suporte</span></a
+          >
+          <div class="secondary-actions">
+            <button id="copyButton" type="button">Copiar diagnóstico</button>
+            <button id="refreshButton" type="button">Atualizar diagnóstico</button>
+          </div>
+        </nav>
+        <div id="actionToast" class="action-toast hidden" role="status" aria-live="polite"></div>
+      </div>
+    </header>
+
+    <main class="container">
 
       <section class="status card" aria-live="polite">
         <h2>Status da consulta</h2>
@@ -85,19 +115,6 @@
           técnico. Nesta versão estática, a Aptu não armazena esses dados em
           banco de dados.
         </p>
-      </section>
-
-      <section class="actions card">
-        <button id="copyButton" type="button">Copiar diagnóstico</button>
-        <button id="refreshButton" type="button">Atualizar diagnóstico</button>
-        <a
-          id="supportButton"
-          class="button-link"
-          href="#"
-          target="_blank"
-          rel="noopener noreferrer"
-          >Enviar diagnóstico pelo WhatsApp</a
-        >
       </section>
 
       <section class="copy-helper card hidden" id="manualCopySection">

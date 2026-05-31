@@ -36,6 +36,7 @@ const elements = {
   copyButton: document.getElementById('copyButton'),
   refreshButton: document.getElementById('refreshButton'),
   supportButton: document.getElementById('supportButton'),
+  actionToast: document.getElementById('actionToast'),
   manualCopySection: document.getElementById('manualCopySection'),
   diagnosticText: document.getElementById('diagnosticText'),
 };
@@ -45,6 +46,7 @@ let lastRunAt = 0;
 let lastRunSucceeded = false;
 let copyFeedbackTimeoutId = null;
 let refreshFeedbackTimeoutId = null;
+let actionToastTimeoutId = null;
 
 function fallbackValue(value, emptyLabel = 'Não informado') {
   if (value === null || value === undefined || value === '') {
@@ -438,6 +440,24 @@ function openSupportWhatsApp(event) {
   window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
 }
 
+function showActionToast(message, kind = 'neutral') {
+  if (!elements.actionToast) return;
+  if (actionToastTimeoutId) {
+    clearTimeout(actionToastTimeoutId);
+  }
+
+  const toast = elements.actionToast;
+  toast.textContent = message;
+  toast.classList.remove('hidden', 'toast-success', 'toast-error', 'toast-neutral');
+  toast.classList.add(kind === 'success' ? 'toast-success' : kind === 'error' ? 'toast-error' : 'toast-neutral');
+
+  actionToastTimeoutId = setTimeout(() => {
+    toast.classList.add('hidden');
+    toast.classList.remove('toast-success', 'toast-error', 'toast-neutral');
+    actionToastTimeoutId = null;
+  }, 2500);
+}
+
 function showCopyButtonFeedback() {
   if (copyFeedbackTimeoutId) {
     clearTimeout(copyFeedbackTimeoutId);
@@ -445,6 +465,7 @@ function showCopyButtonFeedback() {
 
   elements.copyButton.textContent = 'Conteúdo copiado';
   elements.copyButton.classList.add('button-success');
+  showActionToast('Diagnóstico copiado para a área de transferência.', 'success');
   copyFeedbackTimeoutId = setTimeout(() => {
     elements.copyButton.textContent = 'Copiar diagnóstico';
     elements.copyButton.classList.remove('button-success');
@@ -459,6 +480,7 @@ function showRefreshButtonFeedback() {
 
   elements.refreshButton.textContent = 'Diagnóstico atualizado';
   elements.refreshButton.classList.add('button-success');
+  showActionToast('Diagnóstico atualizado com sucesso.', 'success');
   refreshFeedbackTimeoutId = setTimeout(() => {
     elements.refreshButton.textContent = 'Atualizar diagnóstico';
     elements.refreshButton.classList.remove('button-success');
@@ -490,6 +512,7 @@ async function copyDiagnosticText() {
   elements.manualCopySection.classList.remove('hidden');
   elements.diagnosticText.focus();
   elements.diagnosticText.select();
+  showActionToast('Cópia automática indisponível. Use a cópia manual abaixo.', 'error');
   setStatus(
     'Não foi possível copiar automaticamente. Selecione o texto e copie manualmente.',
     'error'
