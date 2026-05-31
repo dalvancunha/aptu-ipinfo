@@ -1,73 +1,45 @@
 # aptu-ipinfo
 
-Página estática para diagnóstico de rede e ambiente do navegador, focada em suporte técnico.
+Página estática de diagnóstico de rede e ambiente do navegador para suporte técnico da Aptu.
 
-URL pública padrão no GitHub Pages:
-- `https://dalvancunha.github.io/aptu-ipinfo/`
+URL pública:
+- `https://ip.aptu.solutions/`
 
-## Estrutura do projeto
+## Tecnologias
 
-- `index.html`
-- `styles.css`
-- `script.js`
-- `assets/`
-- `.nojekyll`
+- HTML
+- CSS
+- JavaScript puro
 
-## API de IP (HTTPS)
+## Dados exibidos
 
-Configuração atual no `script.js`:
+- IP externo
+- Provedor, organização e ASN
+- Localização aproximada
+- Navegador
+- Sistema operacional
+- Idioma
+- User Agent
+- Campo opcional de IP interno/local
 
-```js
-const IP_API_PROVIDER = 'ipapi';
-const IP_API_URL = 'https://ipapi.co/json/';
-```
+## Privacidade
 
-A resposta é normalizada para o formato:
-
-```js
-{
-  status: 'success' || 'error',
-  message: '',
-  ip: '',
-  isp: '',
-  org: '',
-  asn: '',
-  city: '',
-  region: '',
-  country: '',
-  raw: {}
-}
-```
-
-Mapeamento da API:
-- IP externo: `ip`
-- Cidade: `city`
-- Estado/região: `region`
-- País: `country_name`
-- ASN: `asn`
-- Organização: `org`
-- ISP: `org` (fallback)
-
-## Suporte
-
-O botão de suporte abre o canal oficial de atendimento da Aptu e pode preencher a mensagem com diagnóstico resumido.
-
-## Como testar localmente
-
-Exemplo com Python:
-
-```bash
-cd /caminho/para/aptu-ipinfo
-python3 -m http.server 8080
-```
-
-Acesse:
-- `http://localhost:8080`
+- Não usa banco de dados.
+- Não usa cookies.
+- Não armazena dados nesta versão estática.
 
 ## Limitações conhecidas
 
 - A localização por IP é aproximada.
-- VPN, proxy, CGNAT, iCloud Private Relay, Cloudflare WARP ou rede corporativa podem alterar o IP/provedor detectado.
-- A detecção de navegador e sistema operacional é aproximada.
-- A API externa pode ter limite de uso ou indisponibilidade.
-- O projeto não armazena dados e não usa cookies.
+- VPN, proxy, CGNAT, iCloud Private Relay e Cloudflare WARP podem alterar o IP detectado.
+- Navegador e sistema operacional são detecções aproximadas.
+- IP interno/local não é capturado automaticamente por segurança.
+
+## Teste local
+
+```bash
+python3 -m http.server 8080
+```
+
+Acesse localmente:
+- `http://localhost:8080`
