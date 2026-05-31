@@ -156,11 +156,12 @@ function normalizeIpapiResponse(data) {
 }
 
 async function fetchNormalizedIpInfo() {
-  return fetchNormalizedIpInfoWithDebug(() => {});
+  const result = await fetchNormalizedIpInfoWithDebug(() => {});
+  return result.normalized;
 }
 
 async function fetchNormalizedIpInfoWithDebug(debugLog) {
-  let ipv4 = '';
+  let discoveredIp = '';
   let lastError = null;
   let fallbackUsed = 'Nenhum';
 
@@ -172,8 +173,13 @@ async function fetchNormalizedIpInfoWithDebug(debugLog) {
     });
     if (ipv4Lookup.ok) {
       const ipv4Data = await ipv4Lookup.json();
-      ipv4 = fallbackValue(ipv4Data.ip, '');
-      debugLog('Tentativa 1', 'Sucesso', `IP preferencial obtido (${ipv4 ? 'preenchido' : 'vazio'}).`);
+      discoveredIp = fallbackValue(ipv4Data.ip, '');
+      const discoveredType = detectIpType(discoveredIp);
+      debugLog(
+        'Tentativa 1',
+        'Sucesso',
+        `IP preferencial obtido (${discoveredIp ? 'preenchido' : 'vazio'}; tipo detectado: ${discoveredType}).`
+      );
     } else {
       debugLog('Tentativa 1', 'Falhou', `Resposta HTTP ${ipv4Lookup.status}.`);
     }
@@ -182,10 +188,10 @@ async function fetchNormalizedIpInfoWithDebug(debugLog) {
     debugLog('Tentativa 1', 'Erro', fallbackValue(error && error.message, 'Erro sem mensagem.'));
   }
 
-  if (ipv4) {
+  if (discoveredIp) {
     try {
       debugLog('Tentativa 2', 'Iniciada', 'Consulta detalhada usando o IP preferencial.');
-      const byIpUrl = IP_API_BY_IP_URL.replace('{ip}', encodeURIComponent(ipv4));
+      const byIpUrl = IP_API_BY_IP_URL.replace('{ip}', encodeURIComponent(discoveredIp));
       const response = await fetchWithTimeout(byIpUrl, FETCH_TIMEOUT_MS, {
         method: 'GET',
         headers: { Accept: 'application/json' },
@@ -205,7 +211,15 @@ async function fetchNormalizedIpInfoWithDebug(debugLog) {
       }
     } catch (error) {
       lastError = error;
-      debugLog('Tentativa 2', 'Erro', fallbackValue(error && error.message, 'Erro sem mensagem.'));
+      const errorMessage = fallbackValue(error && error.message, 'Erro sem mensagem.');
+      debugLog('Tentativa 2', 'Erro', errorMessage);
+      if (/Failed to fetch|NetworkError|Load failed/i.test(errorMessage)) {
+        debugLog(
+          'Tentativa 2',
+          'Análise',
+          'Falha de rede/camada de segurança no navegador (CORS, bloqueio de privacidade, DNS, firewall ou instabilidade).'
+        );
+      }
     }
   }
 
@@ -230,7 +244,41 @@ async function fetchNormalizedIpInfoWithDebug(debugLog) {
     debugLog('Tentativa 3', 'Falhou', 'Resposta recebida, mas sem dados válidos de IP.');
   } catch (error) {
     lastError = error;
-    debugLog('Tentativa 3', 'Erro', fallbackValue(error && error.message, 'Erro sem mensagem.'));
+    const errorMessage = fallbackValue(error && error.message, 'Erro sem mensagem.');
+    debugLog('Tentativa 3', 'Erro', errorMessage);
+    if (/Failed to fetch|NetworkError|Load failed/i.test(errorMessage)) {
+      debugLog(
+        'Tentativa 3',
+        'Análise',
+        'Falha de rede/camada de segurança no navegador (CORS, bloqueio de privacidade, DNS, firewall ou instabilidade).'
+      );
+    }
+  }
+
+  if (discoveredIp) {
+    debugLog(
+      'Resultado parcial',
+      'Sucesso',
+      'IP básico preservado mesmo sem dados detalhados. Mantendo diagnóstico parcial amigável.'
+    );
+    return {
+      normalized: {
+        status: 'partial',
+        message: lastError && lastError.message ? String(lastError.message) : '',
+        ip: discoveredIp,
+        isp: 'Não informado',
+        org: 'Não informado',
+        asn: 'Não informado',
+        city: 'Não informado',
+        region: 'Não informado',
+        country: 'Não informado',
+        origin: 'Consulta parcial (IP identificado)',
+        raw: {},
+      },
+      fallbackUsed: 'IP básico identificado; detalhes indisponíveis',
+      isPartial: true,
+      partialError: lastError || null,
+    };
   }
 
   throw lastError || new Error('Falha temporária ao consultar IP.');
@@ -692,10 +740,17 @@ async function runDiagnostic(showRefreshFeedback = false) {
     };
     const ipResult = DEBUG_MODE
       ? await fetchNormalizedIpInfoWithDebug(debugLog)
-      : { normalized: await fetchNormalizedIpInfo(), fallbackUsed: 'Não informado' };
+      : { normalized: await fetchNormalizedIpInfo(), fallbackUsed: 'Não informado', isPartial: false, partialError: null };
     const normalizedIp = ipResult.normalized;
     debugReport.fallbackUsed = fallbackValue(ipResult.fallbackUsed, 'Não informado');
-    debugReport.steps.push('Consulta de IP finalizada com sucesso.');
+    const partialErrorMessage =
+      ipResult.partialError && ipResult.partialError.message ? String(ipResult.partialError.message) : '';
+    debugReport.lastJsError = partialErrorMessage;
+    debugReport.steps.push(
+      ipResult.isPartial
+        ? 'Consulta de IP finalizada parcialmente (IP básico disponível; detalhes indisponíveis).'
+        : 'Consulta de IP finalizada com sucesso.'
+    );
     latestDiagnostic = {
       connection,
       ip: {
@@ -718,18 +773,31 @@ async function runDiagnostic(showRefreshFeedback = false) {
       env,
     };
     const proxyResult = detectProxyRelayVpnRisk(latestDiagnostic);
-    latestDiagnostic.ip.proxyDetected = proxyResult.level === 'warning' ? 'Sim' : 'Não';
-    latestDiagnostic.ip.proxyWarning = proxyResult.text;
+    if (ipResult.isPartial) {
+      latestDiagnostic.ip.proxyDetected = 'Não validado';
+      latestDiagnostic.ip.proxyWarning =
+        'Não foi possível validar possível uso de proxy, relay, CDN ou VPN no momento.';
+    } else {
+      latestDiagnostic.ip.proxyDetected = proxyResult.level === 'warning' ? 'Sim' : 'Não';
+      latestDiagnostic.ip.proxyWarning = proxyResult.text;
+    }
     const safariGuidance = getSafariPrivacyGuidance(latestDiagnostic);
     if (safariGuidance) {
       latestDiagnostic.ip.proxyWarning = `${latestDiagnostic.ip.proxyWarning} ${safariGuidance}`;
     }
-    latestDiagnostic.connection.statusText = 'Consulta realizada com sucesso.';
+    latestDiagnostic.connection.statusText = ipResult.isPartial
+      ? 'Consulta parcial: IP externo identificado, mas detalhes adicionais não puderam ser carregados agora.'
+      : 'Consulta realizada com sucesso.';
     lastRunAt = Date.now();
-    lastRunSucceeded = true;
+    lastRunSucceeded = !ipResult.isPartial;
     updateInterface(latestDiagnostic);
     elements.diagnosticText.value = buildDiagnosticText(latestDiagnostic);
-    setStatus('Consulta realizada com sucesso.', 'success');
+    setStatus(
+      ipResult.isPartial
+        ? `${latestDiagnostic.connection.statusText}${partialErrorMessage ? ` Detalhe técnico: ${partialErrorMessage}` : ''}`
+        : 'Consulta realizada com sucesso.',
+      ipResult.isPartial ? 'error' : 'success'
+    );
     renderDebugPanel(debugReport);
     if (showRefreshFeedback) {
       showRefreshButtonFeedback();
