@@ -2,6 +2,8 @@
 
 Página estática de diagnóstico de rede e ambiente do navegador para suporte técnico da Aptu.
 
+Também pode ser instalada/adicionada como app (PWA) em navegadores compatíveis.
+
 ## Tecnologias
 
 - HTML

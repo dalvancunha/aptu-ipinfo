@@ -353,7 +353,6 @@ function buildDiagnosticText(model) {
     `IP externo: ${fallbackValue(model.ip.query, 'Não informado')}`,
     `Tipo de IP: ${fallbackValue(model.ip.type, 'Não identificado')}`,
     `Origem da consulta: ${fallbackValue(model.ip.origin, 'Não informado')}`,
-    `IP interno/local: ${fallbackValue(model.ip.localIp, 'Não informado')}`,
     '',
     'Proxy/Privacidade:',
     `Possível proxy, relay, CDN ou VPN: ${fallbackValue(model.ip.proxyDetected, 'Não validado')}`,
@@ -392,7 +391,6 @@ function buildWhatsAppDiagnosticText(model) {
     `*IP externo:* ${fallbackValue(model.ip.query, 'Não informado')}`,
     `*Tipo de IP:* ${fallbackValue(model.ip.type, 'Não identificado')}`,
     `*Origem da consulta:* ${fallbackValue(model.ip.origin, 'Não informado')}`,
-    `*IP interno/local:* ${fallbackValue(model.ip.localIp, 'Não informado')}`,
     '',
     '*Proxy/Privacidade:*',
     `*Possível proxy, relay, CDN ou VPN:* ${fallbackValue(model.ip.proxyDetected, 'Não validado')}`,
@@ -667,3 +665,11 @@ function init() {
 }
 
 init();
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/service-worker.js").catch(() => {
+      // Falha silenciosa; nao impactar diagnostico.
+    });
+  });
+}
