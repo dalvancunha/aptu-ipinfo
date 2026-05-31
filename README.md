@@ -35,9 +35,14 @@ Página estática de diagnóstico de rede e ambiente do navegador para suporte t
 
 ## Estratégia de consulta de IP
 
-- Fluxo prioritário: `api.ipify.org` para obter IPv4 e, em seguida, `ipapi.co/{ip}/json`.
-- Fallback automático: `ipapi.co/json/` quando o fluxo prioritário falhar.
+- A ferramenta prioriza a exibição de IPv4 quando disponível.
+- Quando não for possível obter IPv4, a consulta automática de IP é usada como fallback.
 - Atualizações manuais em menos de 60s reutilizam o último diagnóstico para evitar excesso de consultas.
+
+## Observações importantes
+
+- Em iPhone/Safari, iCloud Private Relay e recursos de privacidade podem mascarar o IP real.
+- VPNs, proxies e CDNs também podem fazer o IP exibido ser diferente do IP real da rede do cliente.
 
 ## Teste local
 

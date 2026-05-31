@@ -3,6 +3,7 @@ const IP_API_URL = 'https://ipapi.co/json/';
 const IP_API_BY_IP_URL = 'https://ipapi.co/{ip}/json/';
 const IPIFY_IPV4_URL = 'https://api.ipify.org?format=json';
 const MIN_REFRESH_INTERVAL_MS = 60000;
+const MIN_ERROR_RETRY_INTERVAL_MS = 5000;
 const FETCH_TIMEOUT_MS = 8000;
 // Referencia futura (nao usada como padrao em GitHub Pages por ser HTTP):
 // const LEGACY_IP_API_URL = 'http://ip-api.com/json/?fields=status,message,query,isp,org,as,country,regionName,city';
@@ -40,7 +41,8 @@ const elements = {
 };
 
 let latestDiagnostic = null;
-let lastSuccessfulRunAt = 0;
+let lastRunAt = 0;
+let lastRunSucceeded = false;
 let copyFeedbackTimeoutId = null;
 let refreshFeedbackTimeoutId = null;
 
@@ -150,49 +152,61 @@ function normalizeIpapiResponse(data) {
 }
 
 async function fetchNormalizedIpInfo() {
-  const ipv4Lookup = await fetchWithTimeout(IPIFY_IPV4_URL, FETCH_TIMEOUT_MS, {
-    method: 'GET',
-    headers: { Accept: 'application/json' },
-  });
-
   let ipv4 = '';
-  if (ipv4Lookup.ok) {
-    const ipv4Data = await ipv4Lookup.json();
-    ipv4 = fallbackValue(ipv4Data.ip, '');
+  let lastError = null;
+
+  try {
+    const ipv4Lookup = await fetchWithTimeout(IPIFY_IPV4_URL, FETCH_TIMEOUT_MS, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+    if (ipv4Lookup.ok) {
+      const ipv4Data = await ipv4Lookup.json();
+      ipv4 = fallbackValue(ipv4Data.ip, '');
+    }
+  } catch (error) {
+    lastError = error;
   }
 
-  let response = null;
   if (ipv4) {
-    const byIpUrl = IP_API_BY_IP_URL.replace('{ip}', encodeURIComponent(ipv4));
-    response = await fetchWithTimeout(byIpUrl, FETCH_TIMEOUT_MS, {
+    try {
+      const byIpUrl = IP_API_BY_IP_URL.replace('{ip}', encodeURIComponent(ipv4));
+      const response = await fetchWithTimeout(byIpUrl, FETCH_TIMEOUT_MS, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const normalized = normalizeIpapiResponse(data);
+        if (normalized.status === 'success') {
+          normalized.origin = 'Consulta IPv4';
+          return normalized;
+        }
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  try {
+    const response = await fetchWithTimeout(IP_API_URL, FETCH_TIMEOUT_MS, {
       method: 'GET',
       headers: { Accept: 'application/json' },
     });
+    if (!response.ok) {
+      throw new Error(`Resposta inválida da API de IP (${response.status}).`);
+    }
+    const data = await response.json();
+    const normalized = normalizeIpapiResponse(data);
+    if (normalized.status === 'success') {
+      normalized.origin = detectIpType(normalized.ip) === 'IPv6' ? 'Consulta IPv6' : 'Consulta automática';
+      return normalized;
+    }
+  } catch (error) {
+    lastError = error;
   }
 
-  if (!response || !response.ok) {
-    response = await fetchWithTimeout(IP_API_URL, FETCH_TIMEOUT_MS, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-    });
-  }
-
-  if (!response.ok) {
-    throw new Error(`Resposta inválida da API de IP (${response.status}).`);
-  }
-
-  const data = await response.json();
-  const normalized = normalizeIpapiResponse(data);
-  normalized.origin = ipv4 ? 'Consulta IPv4 prioritária (ipify + ipapi)' : 'Fallback automático (ipapi JSON)';
-
-  if (normalized.status !== 'success') {
-    throw new Error(
-      normalized.message ||
-        'Não foi possível obter as informações do IP neste momento. Tente novamente ou envie o diagnóstico parcial ao suporte.'
-    );
-  }
-
-  return normalized;
+  throw lastError || new Error('Falha temporária ao consultar IP.');
 }
 
 async function fetchWithTimeout(url, timeoutMs, options = {}) {
@@ -228,12 +242,24 @@ function detectProxyRelayVpnRisk(model) {
     .join(' ');
 
   const riskyTerms = [
+    'akamai',
+    'apple',
+    'icloud',
     'private relay',
     'icloud private relay',
     'warp',
     'cloudflare',
+    'fastly',
+    'google',
+    'google one vpn',
     'vpn',
     'proxy',
+    'relay',
+    'cdn',
+    'zscaler',
+    'netskope',
+    'cisco umbrella',
+    'cloudproxy',
     'tor',
     'datacenter',
     'hosting',
@@ -244,13 +270,33 @@ function detectProxyRelayVpnRisk(model) {
     return {
       level: 'warning',
       text:
-        'Possível uso de VPN/Proxy/Relay detectado. A localização e o IP podem refletir um ponto intermediário, não o acesso real do usuário.',
+        'Possível proxy, relay de privacidade, CDN ou VPN detectado. O IP exibido pode não ser o IP real da rede do cliente.',
     };
   }
   return {
     level: 'none',
-    text: 'Nenhum indicativo forte de proxy/relay/vpn pelos dados públicos.',
+    text: 'Sem indicativo forte de proxy, relay, CDN ou VPN pelos dados públicos.',
   };
+}
+
+function getSafariPrivacyGuidance(model) {
+  const browserName = fallbackValue(model.env.browserName, '').toLowerCase();
+  const osName = fallbackValue(model.env.osName, '').toLowerCase();
+  const isSafari = browserName.includes('safari');
+  const isIphoneOrIpad = osName.includes('ios') || osName.includes('ipados');
+  const providerText = [model.ip.isp, model.ip.org, model.ip.as]
+    .map((item) => fallbackValue(item, '').toLowerCase())
+    .join(' ');
+  const hasCommonRelayProvider = /akamai|apple|cloudflare|fastly/.test(providerText);
+
+  if (isSafari && isIphoneOrIpad && hasCommonRelayProvider) {
+    return (
+      'No iPhone/iPad com Safari, esse resultado pode estar relacionado ao iCloud Private Relay ou ao recurso de privacidade do Safari. ' +
+      "Para tentar mostrar o IP real, use o menu da página no Safari e escolha 'Mostrar Endereço IP', quando disponível. Depois, toque em Atualizar diagnóstico."
+    );
+  }
+
+  return '';
 }
 
 function setStatus(message, kind = 'neutral') {
@@ -304,13 +350,17 @@ function buildDiagnosticText(model) {
     'Endereço IP:',
     `IP externo: ${fallbackValue(model.ip.query, 'Não informado')}`,
     `Tipo de IP: ${fallbackValue(model.ip.type, 'Não identificado')}`,
-    `Origem do IP: ${fallbackValue(model.ip.origin, 'Não informado')}`,
+    `Origem da consulta: ${fallbackValue(model.ip.origin, 'Não informado')}`,
+    `IP interno/local: ${fallbackValue(model.ip.localIp, 'Não informado')}`,
+    '',
+    'Proxy/Privacidade:',
+    `Possível proxy, relay, CDN ou VPN: ${fallbackValue(model.ip.proxyDetected, 'Não validado')}`,
+    `Observação: ${fallbackValue(model.ip.proxyWarning, 'Não informado')}`,
     '',
     'Provedor do IP externo:',
     `ISP: ${fallbackValue(model.ip.isp, 'Não informado')}`,
     `Organização: ${fallbackValue(model.ip.org, 'Não informado')}`,
     `ASN: ${fallbackValue(model.ip.as, 'Não informado')}`,
-    `Alerta de proxy/relay: ${fallbackValue(model.ip.proxyWarning, 'Não informado')}`,
     '',
     'Localização aproximada:',
     `${fallbackValue(model.ip.city, 'Não informado')} - ${fallbackValue(model.ip.regionName, 'Não informado')}`,
@@ -339,13 +389,17 @@ function buildWhatsAppDiagnosticText(model) {
     '*Endereço IP:*',
     `*IP externo:* ${fallbackValue(model.ip.query, 'Não informado')}`,
     `*Tipo de IP:* ${fallbackValue(model.ip.type, 'Não identificado')}`,
-    `*Origem do IP:* ${fallbackValue(model.ip.origin, 'Não informado')}`,
+    `*Origem da consulta:* ${fallbackValue(model.ip.origin, 'Não informado')}`,
+    `*IP interno/local:* ${fallbackValue(model.ip.localIp, 'Não informado')}`,
+    '',
+    '*Proxy/Privacidade:*',
+    `*Possível proxy, relay, CDN ou VPN:* ${fallbackValue(model.ip.proxyDetected, 'Não validado')}`,
+    `*Observação:* ${fallbackValue(model.ip.proxyWarning, 'Não informado')}`,
     '',
     '*Provedor do IP externo:*',
     `*ISP:* ${fallbackValue(model.ip.isp, 'Não informado')}`,
     `*Organização:* ${fallbackValue(model.ip.org, 'Não informado')}`,
     `*ASN:* ${fallbackValue(model.ip.as, 'Não informado')}`,
-    `*Alerta de proxy/relay:* ${fallbackValue(model.ip.proxyWarning, 'Não informado')}`,
     '',
     '*Localização aproximada:*',
     `${fallbackValue(model.ip.city, 'Não informado')} - ${fallbackValue(model.ip.regionName, 'Não informado')}`,
@@ -446,13 +500,13 @@ function getFriendlyFetchError(error) {
   const message = error && error.message ? error.message : '';
 
   if (/AbortError|aborted|timeout/i.test(message)) {
-    return 'A consulta excedeu o tempo limite. Tente novamente ou envie o diagnóstico parcial ao suporte.';
+    return 'Falha temporária ao consultar o IP. Tente novamente em alguns segundos.';
   }
 
-  if (/Failed to fetch|NetworkError|fetch/i.test(message)) {
+  if (/Load failed|Failed to fetch|NetworkError|fetch/i.test(message)) {
     return (
       'Não foi possível obter as informações do IP neste momento. ' +
-      'Tente novamente ou envie o diagnóstico parcial ao suporte.'
+      'Tente novamente em alguns segundos ou envie o diagnóstico parcial ao suporte.'
     );
   }
 
@@ -464,16 +518,27 @@ function getFriendlyFetchError(error) {
 
 async function runDiagnostic(showRefreshFeedback = false) {
   const nowMs = Date.now();
-  if (showRefreshFeedback && latestDiagnostic && nowMs - lastSuccessfulRunAt < MIN_REFRESH_INTERVAL_MS) {
-    const waitSeconds = Math.ceil((MIN_REFRESH_INTERVAL_MS - (nowMs - lastSuccessfulRunAt)) / 1000);
-    latestDiagnostic.connection.timestamp = new Date().toLocaleString('pt-BR');
-    latestDiagnostic.connection.statusText =
-      `Consulta reutilizada (último diagnóstico ainda válido). Aguarde ${waitSeconds}s para nova atualização.`;
-    updateInterface(latestDiagnostic);
-    elements.diagnosticText.value = buildDiagnosticText(latestDiagnostic);
-    setStatus(latestDiagnostic.connection.statusText, 'neutral');
-    showRefreshButtonFeedback();
-    return;
+  if (showRefreshFeedback && latestDiagnostic) {
+    const elapsedMs = nowMs - lastRunAt;
+    if (lastRunSucceeded && elapsedMs < MIN_REFRESH_INTERVAL_MS) {
+      latestDiagnostic.connection.timestamp = new Date().toLocaleString('pt-BR');
+      latestDiagnostic.connection.statusText =
+        'Aguarde alguns segundos antes de atualizar novamente. Isso evita bloqueios temporários da consulta de IP.';
+      updateInterface(latestDiagnostic);
+      elements.diagnosticText.value = buildDiagnosticText(latestDiagnostic);
+      setStatus(latestDiagnostic.connection.statusText, 'neutral');
+      showRefreshButtonFeedback();
+      return;
+    }
+    if (!lastRunSucceeded && elapsedMs < MIN_ERROR_RETRY_INTERVAL_MS) {
+      latestDiagnostic.connection.timestamp = new Date().toLocaleString('pt-BR');
+      latestDiagnostic.connection.statusText = 'Falha temporária ao consultar o IP. Tente novamente em alguns segundos.';
+      updateInterface(latestDiagnostic);
+      elements.diagnosticText.value = buildDiagnosticText(latestDiagnostic);
+      setStatus(latestDiagnostic.connection.statusText, 'error');
+      showRefreshButtonFeedback();
+      return;
+    }
   }
 
   const now = new Date();
@@ -500,6 +565,8 @@ async function runDiagnostic(showRefreshFeedback = false) {
         country: normalizedIp.country,
         type: detectIpType(normalizedIp.ip),
         origin: fallbackValue(normalizedIp.origin, 'Não informado'),
+        localIp: 'Não informado / não disponível pelo navegador',
+        proxyDetected: 'Não',
         proxyWarning: '',
         status: normalizedIp.status,
         message: normalizedIp.message,
@@ -507,9 +574,16 @@ async function runDiagnostic(showRefreshFeedback = false) {
       },
       env,
     };
-    latestDiagnostic.ip.proxyWarning = detectProxyRelayVpnRisk(latestDiagnostic).text;
+    const proxyResult = detectProxyRelayVpnRisk(latestDiagnostic);
+    latestDiagnostic.ip.proxyDetected = proxyResult.level === 'warning' ? 'Sim' : 'Não';
+    latestDiagnostic.ip.proxyWarning = proxyResult.text;
+    const safariGuidance = getSafariPrivacyGuidance(latestDiagnostic);
+    if (safariGuidance) {
+      latestDiagnostic.ip.proxyWarning = `${latestDiagnostic.ip.proxyWarning} ${safariGuidance}`;
+    }
     latestDiagnostic.connection.statusText = 'Consulta realizada com sucesso.';
-    lastSuccessfulRunAt = Date.now();
+    lastRunAt = Date.now();
+    lastRunSucceeded = true;
     updateInterface(latestDiagnostic);
     elements.diagnosticText.value = buildDiagnosticText(latestDiagnostic);
     setStatus('Consulta realizada com sucesso.', 'success');
@@ -518,6 +592,7 @@ async function runDiagnostic(showRefreshFeedback = false) {
     }
   } catch (error) {
     const friendlyError = getFriendlyFetchError(error);
+    const errorDetail = error && error.message ? String(error.message) : '';
     latestDiagnostic = {
       connection,
       ip: {
@@ -529,18 +604,31 @@ async function runDiagnostic(showRefreshFeedback = false) {
         regionName: 'Não informado',
         country: 'Não informado',
         type: 'Não identificado',
-        origin: 'Não informado',
-        proxyWarning: 'Não foi possível validar possível uso de proxy/relay no momento.',
+        origin: 'Consulta parcial',
+        localIp: 'Não informado / não disponível pelo navegador',
+        proxyDetected: 'Não validado',
+        proxyWarning: 'Não foi possível validar possível uso de proxy, relay, CDN ou VPN no momento.',
         status: 'error',
         message: friendlyError,
         raw: {},
       },
       env,
     };
+    const isSafariMobile =
+      fallbackValue(env.browserName, '').toLowerCase().includes('safari') &&
+      /ios|ipados/i.test(fallbackValue(env.osName, ''));
+    if (isSafariMobile && /Load failed|Failed to fetch/i.test(errorDetail)) {
+      latestDiagnostic.ip.proxyWarning = `${latestDiagnostic.ip.proxyWarning} Se você acabou de tocar em 'Mostrar Endereço IP' no Safari, aguarde alguns segundos e toque em Atualizar diagnóstico. O Safari pode alterar temporariamente a rota de privacidade antes de liberar o IP real para o site.`;
+    }
     latestDiagnostic.connection.statusText = friendlyError;
+    lastRunAt = Date.now();
+    lastRunSucceeded = false;
     updateInterface(latestDiagnostic);
     elements.diagnosticText.value = buildDiagnosticText(latestDiagnostic);
-    setStatus(friendlyError, 'error');
+    setStatus(
+      `${friendlyError}${errorDetail ? ` Detalhe técnico: ${errorDetail}` : ''}`,
+      'error'
+    );
   }
 }
 
