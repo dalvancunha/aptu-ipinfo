@@ -2,6 +2,7 @@ const IP_API_PROVIDER = 'ipapi';
 const IP_API_URL = 'https://ipapi.co/json/';
 // Referencia futura (nao usada como padrao em GitHub Pages por ser HTTP):
 // const LEGACY_IP_API_URL = 'http://ip-api.com/json/?fields=status,message,query,isp,org,as,country,regionName,city';
+// Nota: por ser front-end estatico, qualquer configuracao aqui e publica no navegador.
 const WHATSAPP_PHONE = '5577998329719';
 
 const elements = {
