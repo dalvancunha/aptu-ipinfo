@@ -1,5 +1,9 @@
 const IP_API_PROVIDER = 'ipapi';
 const IP_API_URL = 'https://ipapi.co/json/';
+const IP_API_BY_IP_URL = 'https://ipapi.co/{ip}/json/';
+const IPIFY_IPV4_URL = 'https://api.ipify.org?format=json';
+const MIN_REFRESH_INTERVAL_MS = 60000;
+const FETCH_TIMEOUT_MS = 8000;
 // Referencia futura (nao usada como padrao em GitHub Pages por ser HTTP):
 // const LEGACY_IP_API_URL = 'http://ip-api.com/json/?fields=status,message,query,isp,org,as,country,regionName,city';
 // Nota: por ser front-end estatico, qualquer configuracao aqui e publica no navegador.
@@ -16,6 +20,9 @@ const elements = {
   city: document.getElementById('city'),
   region: document.getElementById('region'),
   country: document.getElementById('country'),
+  ipType: document.getElementById('ipType'),
+  ipOrigin: document.getElementById('ipOrigin'),
+  proxyWarning: document.getElementById('proxyWarning'),
   browserName: document.getElementById('browserName'),
   browserVersion: document.getElementById('browserVersion'),
   osName: document.getElementById('osName'),
@@ -33,6 +40,7 @@ const elements = {
 };
 
 let latestDiagnostic = null;
+let lastSuccessfulRunAt = 0;
 let copyFeedbackTimeoutId = null;
 let refreshFeedbackTimeoutId = null;
 
@@ -142,10 +150,32 @@ function normalizeIpapiResponse(data) {
 }
 
 async function fetchNormalizedIpInfo() {
-  const response = await fetch(IP_API_URL, {
+  const ipv4Lookup = await fetchWithTimeout(IPIFY_IPV4_URL, FETCH_TIMEOUT_MS, {
     method: 'GET',
     headers: { Accept: 'application/json' },
   });
+
+  let ipv4 = '';
+  if (ipv4Lookup.ok) {
+    const ipv4Data = await ipv4Lookup.json();
+    ipv4 = fallbackValue(ipv4Data.ip, '');
+  }
+
+  let response = null;
+  if (ipv4) {
+    const byIpUrl = IP_API_BY_IP_URL.replace('{ip}', encodeURIComponent(ipv4));
+    response = await fetchWithTimeout(byIpUrl, FETCH_TIMEOUT_MS, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+  }
+
+  if (!response || !response.ok) {
+    response = await fetchWithTimeout(IP_API_URL, FETCH_TIMEOUT_MS, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+  }
 
   if (!response.ok) {
     throw new Error(`Resposta inválida da API de IP (${response.status}).`);
@@ -153,6 +183,7 @@ async function fetchNormalizedIpInfo() {
 
   const data = await response.json();
   const normalized = normalizeIpapiResponse(data);
+  normalized.origin = ipv4 ? 'Consulta IPv4 prioritária (ipify + ipapi)' : 'Fallback automático (ipapi JSON)';
 
   if (normalized.status !== 'success') {
     throw new Error(
@@ -162,6 +193,64 @@ async function fetchNormalizedIpInfo() {
   }
 
   return normalized;
+}
+
+async function fetchWithTimeout(url, timeoutMs, options = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function detectIpType(ipValue) {
+  const ip = fallbackValue(ipValue, '').trim();
+  if (!ip) return 'Não identificado';
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) return 'IPv4';
+  if (ip.includes(':')) return 'IPv6';
+  return 'Não identificado';
+}
+
+function detectProxyRelayVpnRisk(model) {
+  const raw = model.ip.raw || {};
+  const text = [
+    model.ip.isp,
+    model.ip.org,
+    model.ip.as,
+    raw.org,
+    raw.network,
+    raw.asn,
+    raw.as_name,
+  ]
+    .map((item) => fallbackValue(item, '').toLowerCase())
+    .join(' ');
+
+  const riskyTerms = [
+    'private relay',
+    'icloud private relay',
+    'warp',
+    'cloudflare',
+    'vpn',
+    'proxy',
+    'tor',
+    'datacenter',
+    'hosting',
+  ];
+  const matchedTerm = riskyTerms.find((term) => text.includes(term));
+
+  if (matchedTerm) {
+    return {
+      level: 'warning',
+      text:
+        'Possível uso de VPN/Proxy/Relay detectado. A localização e o IP podem refletir um ponto intermediário, não o acesso real do usuário.',
+    };
+  }
+  return {
+    level: 'none',
+    text: 'Nenhum indicativo forte de proxy/relay/vpn pelos dados públicos.',
+  };
 }
 
 function setStatus(message, kind = 'neutral') {
@@ -186,6 +275,9 @@ function updateInterface(model) {
   elements.city.textContent = fallbackValue(model.ip.city, 'Não informado');
   elements.region.textContent = fallbackValue(model.ip.regionName, 'Não informado');
   elements.country.textContent = fallbackValue(model.ip.country, 'Não informado');
+  elements.ipType.textContent = fallbackValue(model.ip.type, 'Não identificado');
+  elements.ipOrigin.textContent = fallbackValue(model.ip.origin, 'Não informado');
+  elements.proxyWarning.textContent = fallbackValue(model.ip.proxyWarning, 'Não informado');
 
   elements.browserName.textContent = fallbackValue(model.env.browserName, 'Não identificado');
   elements.browserVersion.textContent = fallbackValue(model.env.browserVersion, 'Não identificado');
@@ -211,11 +303,14 @@ function buildDiagnosticText(model) {
     '',
     'Endereço IP:',
     `IP externo: ${fallbackValue(model.ip.query, 'Não informado')}`,
+    `Tipo de IP: ${fallbackValue(model.ip.type, 'Não identificado')}`,
+    `Origem do IP: ${fallbackValue(model.ip.origin, 'Não informado')}`,
     '',
     'Provedor do IP externo:',
     `ISP: ${fallbackValue(model.ip.isp, 'Não informado')}`,
     `Organização: ${fallbackValue(model.ip.org, 'Não informado')}`,
     `ASN: ${fallbackValue(model.ip.as, 'Não informado')}`,
+    `Alerta de proxy/relay: ${fallbackValue(model.ip.proxyWarning, 'Não informado')}`,
     '',
     'Localização aproximada:',
     `${fallbackValue(model.ip.city, 'Não informado')} - ${fallbackValue(model.ip.regionName, 'Não informado')}`,
@@ -243,11 +338,14 @@ function buildWhatsAppDiagnosticText(model) {
     '',
     '*Endereço IP:*',
     `*IP externo:* ${fallbackValue(model.ip.query, 'Não informado')}`,
+    `*Tipo de IP:* ${fallbackValue(model.ip.type, 'Não identificado')}`,
+    `*Origem do IP:* ${fallbackValue(model.ip.origin, 'Não informado')}`,
     '',
     '*Provedor do IP externo:*',
     `*ISP:* ${fallbackValue(model.ip.isp, 'Não informado')}`,
     `*Organização:* ${fallbackValue(model.ip.org, 'Não informado')}`,
     `*ASN:* ${fallbackValue(model.ip.as, 'Não informado')}`,
+    `*Alerta de proxy/relay:* ${fallbackValue(model.ip.proxyWarning, 'Não informado')}`,
     '',
     '*Localização aproximada:*',
     `${fallbackValue(model.ip.city, 'Não informado')} - ${fallbackValue(model.ip.regionName, 'Não informado')}`,
@@ -347,6 +445,10 @@ async function copyDiagnosticText() {
 function getFriendlyFetchError(error) {
   const message = error && error.message ? error.message : '';
 
+  if (/AbortError|aborted|timeout/i.test(message)) {
+    return 'A consulta excedeu o tempo limite. Tente novamente ou envie o diagnóstico parcial ao suporte.';
+  }
+
   if (/Failed to fetch|NetworkError|fetch/i.test(message)) {
     return (
       'Não foi possível obter as informações do IP neste momento. ' +
@@ -361,6 +463,19 @@ function getFriendlyFetchError(error) {
 }
 
 async function runDiagnostic(showRefreshFeedback = false) {
+  const nowMs = Date.now();
+  if (showRefreshFeedback && latestDiagnostic && nowMs - lastSuccessfulRunAt < MIN_REFRESH_INTERVAL_MS) {
+    const waitSeconds = Math.ceil((MIN_REFRESH_INTERVAL_MS - (nowMs - lastSuccessfulRunAt)) / 1000);
+    latestDiagnostic.connection.timestamp = new Date().toLocaleString('pt-BR');
+    latestDiagnostic.connection.statusText =
+      `Consulta reutilizada (último diagnóstico ainda válido). Aguarde ${waitSeconds}s para nova atualização.`;
+    updateInterface(latestDiagnostic);
+    elements.diagnosticText.value = buildDiagnosticText(latestDiagnostic);
+    setStatus(latestDiagnostic.connection.statusText, 'neutral');
+    showRefreshButtonFeedback();
+    return;
+  }
+
   const now = new Date();
   const connection = {
     protocol: window.location.protocol.replace(':', '').toUpperCase(),
@@ -383,13 +498,18 @@ async function runDiagnostic(showRefreshFeedback = false) {
         city: normalizedIp.city,
         regionName: normalizedIp.region,
         country: normalizedIp.country,
+        type: detectIpType(normalizedIp.ip),
+        origin: fallbackValue(normalizedIp.origin, 'Não informado'),
+        proxyWarning: '',
         status: normalizedIp.status,
         message: normalizedIp.message,
         raw: normalizedIp.raw,
       },
       env,
     };
+    latestDiagnostic.ip.proxyWarning = detectProxyRelayVpnRisk(latestDiagnostic).text;
     latestDiagnostic.connection.statusText = 'Consulta realizada com sucesso.';
+    lastSuccessfulRunAt = Date.now();
     updateInterface(latestDiagnostic);
     elements.diagnosticText.value = buildDiagnosticText(latestDiagnostic);
     setStatus('Consulta realizada com sucesso.', 'success');
@@ -408,6 +528,9 @@ async function runDiagnostic(showRefreshFeedback = false) {
         city: 'Não informado',
         regionName: 'Não informado',
         country: 'Não informado',
+        type: 'Não identificado',
+        origin: 'Não informado',
+        proxyWarning: 'Não foi possível validar possível uso de proxy/relay no momento.',
         status: 'error',
         message: friendlyError,
         raw: {},

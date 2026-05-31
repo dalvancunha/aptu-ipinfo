@@ -80,6 +80,10 @@ p {
   color: var(--error);
 }
 
+.warning-text {
+  color: #7b4f00;
+}
+
 .actions {
   display: grid;
   gap: 0.6rem;
