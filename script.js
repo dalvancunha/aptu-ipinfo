@@ -5,7 +5,7 @@ const IPIFY_IPV4_URL = 'https://api.ipify.org?format=json';
 const MIN_REFRESH_INTERVAL_MS = 60000;
 const MIN_ERROR_RETRY_INTERVAL_MS = 5000;
 const FETCH_TIMEOUT_MS = 8000;
-const APP_VERSION = 'app-2026-05-31-sw-v3';
+const APP_VERSION = 'app-2026-05-31-sw-v4';
 const DEBUG_MODE = new URLSearchParams(window.location.search).get('debug') === '1';
 // Referencia futura (nao usada como padrao em GitHub Pages por ser HTTP):
 // const LEGACY_IP_API_URL = 'http://ip-api.com/json/?fields=status,message,query,isp,org,as,country,regionName,city';

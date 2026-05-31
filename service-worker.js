@@ -1,11 +1,15 @@
 const CACHE_PREFIX = 'aptu-ipinfo';
-const STATIC_CACHE_NAME = `${CACHE_PREFIX}-static-v3`;
+const CACHE_VERSION = 'v4';
+const APP_VERSION = 'app-2026-05-31-sw-v4';
+const STATIC_CACHE_NAME = `${CACHE_PREFIX}-static-${CACHE_VERSION}`;
 
 const STATIC_ASSETS = [
   '/',
   '/index.html',
   '/styles.css',
+  `/styles.css?v=${APP_VERSION}`,
   '/script.js',
+  `/script.js?v=${APP_VERSION}`,
   '/manifest.webmanifest',
   '/assets/favicon.svg',
   '/assets/favicon.ico',
