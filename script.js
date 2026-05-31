@@ -5,6 +5,7 @@ const IPIFY_IPV4_URL = 'https://api.ipify.org?format=json';
 const MIN_REFRESH_INTERVAL_MS = 60000;
 const MIN_ERROR_RETRY_INTERVAL_MS = 5000;
 const FETCH_TIMEOUT_MS = 8000;
+const APP_VERSION = 'app-2026-05-31-sw-v3';
 const DEBUG_MODE = new URLSearchParams(window.location.search).get('debug') === '1';
 // Referencia futura (nao usada como padrao em GitHub Pages por ser HTTP):
 // const LEGACY_IP_API_URL = 'http://ip-api.com/json/?fields=status,message,query,isp,org,as,country,regionName,city';
@@ -670,6 +671,7 @@ function renderDebugPanel(report) {
 
   const lines = [
     'Resumo técnico:',
+    `- Versão do app: ${report.appVersion}`,
     `- Timeout configurado: ${report.timeoutMs} ms`,
     `- Navegador detectado: ${report.browser}`,
     `- Service Worker: ${report.serviceWorker}`,
@@ -721,6 +723,7 @@ async function runDiagnostic(showRefreshFeedback = false) {
 
   const env = getEnvironmentInfo();
   const debugReport = {
+    appVersion: APP_VERSION,
     timeoutMs: FETCH_TIMEOUT_MS,
     browser: `${fallbackValue(env.browserName, 'Não identificado')} ${fallbackValue(env.browserVersion, '')}`.trim(),
     serviceWorker: 'Coletando...',
@@ -862,8 +865,11 @@ init();
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/service-worker.js").catch(() => {
-      // Falha silenciosa; nao impactar diagnostico.
-    });
+    navigator.serviceWorker
+      .register("/service-worker.js", { updateViaCache: "none" })
+      .then((registration) => registration.update())
+      .catch(() => {
+        // Falha silenciosa; nao impactar diagnostico.
+      });
   });
 }

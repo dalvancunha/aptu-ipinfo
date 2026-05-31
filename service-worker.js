@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'aptu-ipinfo';
-const STATIC_CACHE_NAME = `${CACHE_PREFIX}-static-v2`;
+const STATIC_CACHE_NAME = `${CACHE_PREFIX}-static-v3`;
 
 const STATIC_ASSETS = [
   '/',
@@ -21,7 +21,10 @@ const STATIC_ASSETS = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(STATIC_CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS))
+    caches
+      .open(STATIC_CACHE_NAME)
+      .then((cache) => cache.addAll(STATIC_ASSETS))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -40,6 +43,35 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+async function networkFirst(request, fallbackUrl) {
+  try {
+    const networkResponse = await fetch(request);
+    if (networkResponse && networkResponse.ok) {
+      const responseClone = networkResponse.clone();
+      const cache = await caches.open(STATIC_CACHE_NAME);
+      await cache.put(fallbackUrl || request, responseClone);
+    }
+    return networkResponse;
+  } catch (_error) {
+    return caches.match(fallbackUrl || request);
+  }
+}
+
+async function cacheFirst(request) {
+  const cachedResponse = await caches.match(request);
+  if (cachedResponse) {
+    return cachedResponse;
+  }
+
+  const networkResponse = await fetch(request);
+  if (networkResponse && networkResponse.ok) {
+    const responseClone = networkResponse.clone();
+    const cache = await caches.open(STATIC_CACHE_NAME);
+    await cache.put(request, responseClone);
+  }
+  return networkResponse;
+}
+
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') {
     return;
@@ -53,39 +85,24 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (event.request.mode === 'navigate') {
-    event.respondWith(
-      fetch(event.request)
-        .then((response) => {
-          const responseClone = response.clone();
-          caches.open(STATIC_CACHE_NAME).then((cache) => {
-            cache.put('/index.html', responseClone);
-          });
-          return response;
-        })
-        .catch(() => caches.match('/index.html'))
-    );
+    event.respondWith(networkFirst(event.request, '/index.html'));
     return;
   }
 
-  event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        return cachedResponse;
-      }
+  const isAppCode =
+    event.request.destination === 'script' ||
+    event.request.destination === 'style' ||
+    requestUrl.pathname === '/script.js' ||
+    requestUrl.pathname === '/styles.css';
 
-      return fetch(event.request).then((networkResponse) => {
-        const destination = event.request.destination;
-        const shouldCache = ['script', 'style', 'image', 'font', 'manifest'].includes(destination);
+  if (isAppCode) {
+    event.respondWith(networkFirst(event.request));
+    return;
+  }
 
-        if (shouldCache && networkResponse && networkResponse.ok) {
-          const responseClone = networkResponse.clone();
-          caches.open(STATIC_CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseClone);
-          });
-        }
+  const shouldCacheFirst = ['image', 'font', 'manifest'].includes(event.request.destination);
 
-        return networkResponse;
-      });
-    })
-  );
+  if (shouldCacheFirst) {
+    event.respondWith(cacheFirst(event.request));
+  }
 });
