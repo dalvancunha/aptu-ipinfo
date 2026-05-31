@@ -52,20 +52,6 @@ Mapeamento da API:
 
 O botão de suporte abre o canal oficial de atendimento da Aptu e pode preencher a mensagem com diagnóstico resumido.
 
-## Publicação no GitHub Pages
-
-Este projeto pode ser publicado pelo GitHub Pages a partir da branch `main`, pasta `/ (root)`.
-
-Passos básicos:
-1. Enviar os arquivos do projeto para o repositório.
-2. Abrir `Settings` > `Pages`.
-3. Em `Source`, escolher `Deploy from a branch`.
-4. Selecionar branch `main` e pasta `/ (root)`.
-5. Salvar e aguardar publicação.
-
-Observação:
-- Configurações de domínio personalizado e DNS devem ser mantidas em documentação interna da Aptu.
-
 ## Como testar localmente
 
 Exemplo com Python:

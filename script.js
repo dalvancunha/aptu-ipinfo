@@ -265,9 +265,9 @@ function buildWhatsAppDiagnosticText(model) {
 
 function buildWhatsAppUrl(diagnosticText) {
   const fallbackText =
-    'Preciso de suporte Aptu.\n\nNão consegui gerar automaticamente o diagnóstico completo de rede.';
+    'Segue meu diagnóstico de rede:\n\nNão consegui gerar automaticamente o diagnóstico completo de rede.';
   const baseMessage = diagnosticText
-    ? `Preciso de suporte Aptu.\n\nSegue meu diagnóstico de rede:\n\n${diagnosticText}`
+    ? `Segue meu diagnóstico de rede:\n\n${diagnosticText}`
     : fallbackText;
   const normalizedMessage = baseMessage.replace(/\n/g, '\r\n');
 
