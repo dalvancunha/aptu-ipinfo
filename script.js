@@ -1,0 +1,434 @@
+const IP_API_PROVIDER = 'ipapi';
+const IP_API_URL = 'https://ipapi.co/json/';
+// Referencia futura (nao usada como padrao em GitHub Pages por ser HTTP):
+// const LEGACY_IP_API_URL = 'http://ip-api.com/json/?fields=status,message,query,isp,org,as,country,regionName,city';
+const WHATSAPP_PHONE = '5577998329719';
+
+const elements = {
+  statusMessage: document.getElementById('statusMessage'),
+  protocol: document.getElementById('protocol'),
+  timestamp: document.getElementById('timestamp'),
+  ipAddress: document.getElementById('ipAddress'),
+  isp: document.getElementById('isp'),
+  org: document.getElementById('org'),
+  asn: document.getElementById('asn'),
+  city: document.getElementById('city'),
+  region: document.getElementById('region'),
+  country: document.getElementById('country'),
+  browserName: document.getElementById('browserName'),
+  browserVersion: document.getElementById('browserVersion'),
+  osName: document.getElementById('osName'),
+  deviceType: document.getElementById('deviceType'),
+  language: document.getElementById('language'),
+  languages: document.getElementById('languages'),
+  platform: document.getElementById('platform'),
+  vendor: document.getElementById('vendor'),
+  userAgent: document.getElementById('userAgent'),
+  copyButton: document.getElementById('copyButton'),
+  refreshButton: document.getElementById('refreshButton'),
+  supportButton: document.getElementById('supportButton'),
+  manualCopySection: document.getElementById('manualCopySection'),
+  diagnosticText: document.getElementById('diagnosticText'),
+};
+
+let latestDiagnostic = null;
+let copyFeedbackTimeoutId = null;
+let refreshFeedbackTimeoutId = null;
+
+function fallbackValue(value, emptyLabel = 'Não informado') {
+  if (value === null || value === undefined || value === '') {
+    return emptyLabel;
+  }
+  return String(value);
+}
+
+function detectBrowser(userAgent) {
+  const ua = userAgent || '';
+  let name = 'Navegador desconhecido';
+  let version = 'Não identificado';
+
+  const patterns = [
+    { name: 'Samsung Internet', regex: /SamsungBrowser\/(\d+[\d.]*)/i },
+    { name: 'Edge', regex: /Edg\/(\d+[\d.]*)/i },
+    { name: 'Opera', regex: /(OPR|Opera)\/(\d+[\d.]*)/i, group: 2 },
+    { name: 'Firefox', regex: /Firefox\/(\d+[\d.]*)/i },
+    { name: 'Chrome', regex: /Chrome\/(\d+[\d.]*)/i },
+    { name: 'Safari', regex: /Version\/(\d+[\d.]*)[\s\S]*Safari/i },
+  ];
+
+  for (const pattern of patterns) {
+    const match = ua.match(pattern.regex);
+    if (match) {
+      name = pattern.name;
+      version = match[pattern.group || 1] || 'Não identificado';
+      break;
+    }
+  }
+
+  return { name, version };
+}
+
+function detectOS(userAgent, platform) {
+  const ua = (userAgent || '').toLowerCase();
+  const pf = (platform || '').toLowerCase();
+
+  if (/windows/.test(ua) || /win/.test(pf)) return 'Windows';
+  if (/iphone|ipad|ipod/.test(ua)) {
+    if (/ipad/.test(ua)) return 'iPadOS';
+    return 'iOS';
+  }
+  if (/mac os x|macintosh/.test(ua) || /mac/.test(pf)) return 'macOS';
+  if (/android/.test(ua)) return 'Android';
+  if (/cros/.test(ua)) return 'ChromeOS';
+  if (/linux/.test(ua) || /linux/.test(pf)) return 'Linux';
+
+  return 'Sistema desconhecido';
+}
+
+function detectDeviceType(userAgent, userAgentData) {
+  const ua = (userAgent || '').toLowerCase();
+
+  if (userAgentData && userAgentData.mobile === true) {
+    return 'Celular';
+  }
+
+  if (/ipad|tablet/.test(ua)) return 'Tablet';
+  if (/mobi|iphone|android/.test(ua)) return 'Celular';
+  if (ua) return 'Desktop';
+
+  return 'Desconhecido';
+}
+
+function getEnvironmentInfo() {
+  const nav = navigator;
+  const userAgent = nav.userAgent || '';
+  const platform = nav.platform || '';
+  const browser = detectBrowser(userAgent);
+
+  return {
+    browserName: browser.name,
+    browserVersion: browser.version,
+    osName: detectOS(userAgent, platform),
+    deviceType: detectDeviceType(userAgent, nav.userAgentData),
+    language: nav.language || '',
+    languages: Array.isArray(nav.languages) ? nav.languages.join(', ') : '',
+    platform,
+    vendor: nav.vendor || '',
+    userAgent,
+  };
+}
+
+function normalizeIpapiResponse(data) {
+  const hasIp = Boolean(data && data.ip);
+  const status = hasIp ? 'success' : 'error';
+  const message =
+    data && data.error
+      ? fallbackValue(data.reason || data.message, 'Erro ao consultar API de IP.')
+      : '';
+
+  return {
+    status,
+    message,
+    ip: hasIp ? fallbackValue(data.ip, '') : '',
+    isp: fallbackValue(data.org, ''),
+    org: fallbackValue(data.org, ''),
+    asn: fallbackValue(data.asn, ''),
+    city: fallbackValue(data.city, ''),
+    region: fallbackValue(data.region, ''),
+    country: fallbackValue(data.country_name, ''),
+    raw: data || {},
+  };
+}
+
+async function fetchNormalizedIpInfo() {
+  const response = await fetch(IP_API_URL, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Resposta inválida da API de IP (${response.status}).`);
+  }
+
+  const data = await response.json();
+  const normalized = normalizeIpapiResponse(data);
+
+  if (normalized.status !== 'success') {
+    throw new Error(
+      normalized.message ||
+        'Não foi possível obter as informações do IP neste momento. Tente novamente ou envie o diagnóstico parcial ao suporte.'
+    );
+  }
+
+  return normalized;
+}
+
+function setStatus(message, kind = 'neutral') {
+  elements.statusMessage.textContent = message;
+  elements.statusMessage.classList.remove('status-success', 'status-error');
+
+  if (kind === 'success') {
+    elements.statusMessage.classList.add('status-success');
+  } else if (kind === 'error') {
+    elements.statusMessage.classList.add('status-error');
+  }
+}
+
+function updateInterface(model) {
+  elements.protocol.textContent = fallbackValue(model.connection.protocol, 'Não identificado');
+  elements.timestamp.textContent = fallbackValue(model.connection.timestamp, 'Não informado');
+
+  elements.ipAddress.textContent = fallbackValue(model.ip.query, 'Não informado');
+  elements.isp.textContent = fallbackValue(model.ip.isp, 'Não informado');
+  elements.org.textContent = fallbackValue(model.ip.org, 'Não informado');
+  elements.asn.textContent = fallbackValue(model.ip.as, 'Não informado');
+  elements.city.textContent = fallbackValue(model.ip.city, 'Não informado');
+  elements.region.textContent = fallbackValue(model.ip.regionName, 'Não informado');
+  elements.country.textContent = fallbackValue(model.ip.country, 'Não informado');
+
+  elements.browserName.textContent = fallbackValue(model.env.browserName, 'Não identificado');
+  elements.browserVersion.textContent = fallbackValue(model.env.browserVersion, 'Não identificado');
+  elements.osName.textContent = fallbackValue(model.env.osName, 'Não identificado');
+  elements.deviceType.textContent = fallbackValue(model.env.deviceType, 'Desconhecido');
+  elements.language.textContent = fallbackValue(model.env.language, 'Não informado');
+  elements.languages.textContent = fallbackValue(model.env.languages, 'Não informado');
+  elements.platform.textContent = fallbackValue(model.env.platform, 'Não informado');
+  elements.vendor.textContent = fallbackValue(model.env.vendor, 'Não informado');
+  elements.userAgent.textContent = fallbackValue(model.env.userAgent, 'Não informado');
+}
+
+function buildDiagnosticText(model) {
+  return [
+    'Diagnóstico de Rede - Aptu',
+    '',
+    'Status da consulta:',
+    `${fallbackValue(model.connection.statusText, 'Não informado')}`,
+    '',
+    'Conexão:',
+    `Protocolo: ${fallbackValue(model.connection.protocol, 'Não identificado')}`,
+    `Data/Hora: ${fallbackValue(model.connection.timestamp, 'Não informado')}`,
+    '',
+    'Endereço IP:',
+    `IP externo: ${fallbackValue(model.ip.query, 'Não informado')}`,
+    '',
+    'Provedor do IP externo:',
+    `ISP: ${fallbackValue(model.ip.isp, 'Não informado')}`,
+    `Organização: ${fallbackValue(model.ip.org, 'Não informado')}`,
+    `ASN: ${fallbackValue(model.ip.as, 'Não informado')}`,
+    '',
+    'Localização aproximada:',
+    `${fallbackValue(model.ip.city, 'Não informado')} - ${fallbackValue(model.ip.regionName, 'Não informado')}`,
+    `${fallbackValue(model.ip.country, 'Não informado')}`,
+    '',
+    'Navegador e sistema:',
+    `Navegador: ${fallbackValue(model.env.browserName, 'Não identificado')}`,
+    `Versão: ${fallbackValue(model.env.browserVersion, 'Não identificado')}`,
+    `Sistema operacional: ${fallbackValue(model.env.osName, 'Não identificado')}`,
+    `Tipo de dispositivo: ${fallbackValue(model.env.deviceType, 'Desconhecido')}`,
+    `Plataforma: ${fallbackValue(model.env.platform, 'Não informado')}`,
+    `Vendor: ${fallbackValue(model.env.vendor, 'Não informado')}`,
+  ].join('\n');
+}
+
+function buildWhatsAppDiagnosticText(model) {
+  return [
+    '*Diagnóstico de Rede - Aptu*',
+    '',
+    `*Status da consulta:* ${fallbackValue(model.connection.statusText, 'Não informado')}`,
+    '',
+    '*Conexão:*',
+    `*Protocolo:* ${fallbackValue(model.connection.protocol, 'Não identificado')}`,
+    `*Data/Hora:* ${fallbackValue(model.connection.timestamp, 'Não informado')}`,
+    '',
+    '*Endereço IP:*',
+    `*IP externo:* ${fallbackValue(model.ip.query, 'Não informado')}`,
+    '',
+    '*Provedor do IP externo:*',
+    `*ISP:* ${fallbackValue(model.ip.isp, 'Não informado')}`,
+    `*Organização:* ${fallbackValue(model.ip.org, 'Não informado')}`,
+    `*ASN:* ${fallbackValue(model.ip.as, 'Não informado')}`,
+    '',
+    '*Localização aproximada:*',
+    `${fallbackValue(model.ip.city, 'Não informado')} - ${fallbackValue(model.ip.regionName, 'Não informado')}`,
+    `${fallbackValue(model.ip.country, 'Não informado')}`,
+    '',
+    '*Navegador e sistema:*',
+    `*Navegador:* ${fallbackValue(model.env.browserName, 'Não identificado')}`,
+    `*Versão:* ${fallbackValue(model.env.browserVersion, 'Não identificado')}`,
+    `*Sistema operacional:* ${fallbackValue(model.env.osName, 'Não identificado')}`,
+    `*Tipo de dispositivo:* ${fallbackValue(model.env.deviceType, 'Desconhecido')}`,
+    `*Plataforma:* ${fallbackValue(model.env.platform, 'Não informado')}`,
+    `*Vendor:* ${fallbackValue(model.env.vendor, 'Não informado')}`,
+  ].join('\n');
+}
+
+function buildWhatsAppUrl(diagnosticText) {
+  const fallbackText =
+    'Preciso de suporte Aptu.\n\nNão consegui gerar automaticamente o diagnóstico completo de rede.';
+  const baseMessage = diagnosticText
+    ? `Preciso de suporte Aptu.\n\nSegue meu diagnóstico de rede:\n\n${diagnosticText}`
+    : fallbackText;
+  const normalizedMessage = baseMessage.replace(/\n/g, '\r\n');
+
+  return (
+    `https://api.whatsapp.com/send/?phone=${WHATSAPP_PHONE}` +
+    `&text=${encodeURIComponent(normalizedMessage)}&type=phone_number&app_absent=0`
+  );
+}
+
+function openSupportWhatsApp(event) {
+  event.preventDefault();
+
+  const hasLoadedDiagnostic = Boolean(latestDiagnostic);
+  const diagnosticText = hasLoadedDiagnostic ? buildWhatsAppDiagnosticText(latestDiagnostic) : '';
+  const whatsappUrl = buildWhatsAppUrl(diagnosticText);
+  window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+}
+
+function showCopyButtonFeedback() {
+  if (copyFeedbackTimeoutId) {
+    clearTimeout(copyFeedbackTimeoutId);
+  }
+
+  elements.copyButton.textContent = 'Conteúdo copiado';
+  elements.copyButton.classList.add('button-success');
+  copyFeedbackTimeoutId = setTimeout(() => {
+    elements.copyButton.textContent = 'Copiar diagnóstico';
+    elements.copyButton.classList.remove('button-success');
+    copyFeedbackTimeoutId = null;
+  }, 2500);
+}
+
+function showRefreshButtonFeedback() {
+  if (refreshFeedbackTimeoutId) {
+    clearTimeout(refreshFeedbackTimeoutId);
+  }
+
+  elements.refreshButton.textContent = 'Diagnóstico atualizado';
+  elements.refreshButton.classList.add('button-success');
+  refreshFeedbackTimeoutId = setTimeout(() => {
+    elements.refreshButton.textContent = 'Atualizar diagnóstico';
+    elements.refreshButton.classList.remove('button-success');
+    refreshFeedbackTimeoutId = null;
+  }, 2500);
+}
+
+async function copyDiagnosticText() {
+  if (!latestDiagnostic) {
+    setStatus('Nenhum diagnóstico disponível para copiar.', 'error');
+    return;
+  }
+
+  const diagnosticText = buildDiagnosticText(latestDiagnostic);
+  elements.diagnosticText.value = diagnosticText;
+
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(diagnosticText);
+      elements.manualCopySection.classList.add('hidden');
+      setStatus('Diagnóstico copiado com sucesso.', 'success');
+      showCopyButtonFeedback();
+      return;
+    } catch (_error) {
+      // Continua para fallback manual.
+    }
+  }
+
+  elements.manualCopySection.classList.remove('hidden');
+  elements.diagnosticText.focus();
+  elements.diagnosticText.select();
+  setStatus(
+    'Não foi possível copiar automaticamente. Selecione o texto e copie manualmente.',
+    'error'
+  );
+}
+
+function getFriendlyFetchError(error) {
+  const message = error && error.message ? error.message : '';
+
+  if (/Failed to fetch|NetworkError|fetch/i.test(message)) {
+    return (
+      'Não foi possível obter as informações do IP neste momento. ' +
+      'Tente novamente ou envie o diagnóstico parcial ao suporte.'
+    );
+  }
+
+  return (
+    message ||
+    'Não foi possível obter as informações do IP neste momento. Tente novamente ou envie o diagnóstico parcial ao suporte.'
+  );
+}
+
+async function runDiagnostic(showRefreshFeedback = false) {
+  const now = new Date();
+  const connection = {
+    protocol: window.location.protocol.replace(':', '').toUpperCase(),
+    timestamp: now.toLocaleString('pt-BR'),
+    statusText: 'Carregando diagnóstico...',
+  };
+
+  const env = getEnvironmentInfo();
+  setStatus('Carregando diagnóstico...', 'neutral');
+
+  try {
+    const normalizedIp = await fetchNormalizedIpInfo();
+    latestDiagnostic = {
+      connection,
+      ip: {
+        query: normalizedIp.ip,
+        isp: normalizedIp.isp || normalizedIp.org,
+        org: normalizedIp.org,
+        as: normalizedIp.asn,
+        city: normalizedIp.city,
+        regionName: normalizedIp.region,
+        country: normalizedIp.country,
+        status: normalizedIp.status,
+        message: normalizedIp.message,
+        raw: normalizedIp.raw,
+      },
+      env,
+    };
+    latestDiagnostic.connection.statusText = 'Consulta realizada com sucesso.';
+    updateInterface(latestDiagnostic);
+    elements.diagnosticText.value = buildDiagnosticText(latestDiagnostic);
+    setStatus('Consulta realizada com sucesso.', 'success');
+    if (showRefreshFeedback) {
+      showRefreshButtonFeedback();
+    }
+  } catch (error) {
+    const friendlyError = getFriendlyFetchError(error);
+    latestDiagnostic = {
+      connection,
+      ip: {
+        query: 'Não informado',
+        isp: 'Não informado',
+        org: 'Não informado',
+        as: 'Não informado',
+        city: 'Não informado',
+        regionName: 'Não informado',
+        country: 'Não informado',
+        status: 'error',
+        message: friendlyError,
+        raw: {},
+      },
+      env,
+    };
+    latestDiagnostic.connection.statusText = friendlyError;
+    updateInterface(latestDiagnostic);
+    elements.diagnosticText.value = buildDiagnosticText(latestDiagnostic);
+    setStatus(friendlyError, 'error');
+  }
+}
+
+function bindEvents() {
+  elements.copyButton.addEventListener('click', copyDiagnosticText);
+  elements.refreshButton.addEventListener('click', () => runDiagnostic(true));
+  elements.supportButton.addEventListener('click', openSupportWhatsApp);
+}
+
+function init() {
+  bindEvents();
+  runDiagnostic();
+}
+
+init();

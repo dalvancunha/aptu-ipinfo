@@ -1,0 +1,162 @@
+:root {
+  --bg: #f6f3ff;
+  --surface: #ffffff;
+  --primary: #522e91;
+  --primary-strong: #3f2370;
+  --text: #241a37;
+  --muted: #6f6383;
+  --border: #ddd3ef;
+  --success: #126634;
+  --error: #a11818;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  background: linear-gradient(180deg, #fbf8ff 0%, var(--bg) 100%);
+  color: var(--text);
+}
+
+.container {
+  width: min(980px, 100% - 2rem);
+  margin: 1.5rem auto 2.5rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1rem;
+  box-shadow: 0 4px 18px rgba(16, 32, 51, 0.04);
+}
+
+.header {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.logo {
+  width: 180px;
+  height: 64px;
+  object-fit: contain;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.subtitle {
+  margin: 0.3rem 0 0;
+  color: var(--muted);
+}
+
+h2 {
+  margin: 0 0 0.8rem;
+  font-size: 1.05rem;
+}
+
+p {
+  margin: 0.35rem 0;
+  line-height: 1.4;
+}
+
+.status p {
+  font-weight: 600;
+}
+
+.status-success {
+  color: var(--success);
+}
+
+.status-error {
+  color: var(--error);
+}
+
+.actions {
+  display: grid;
+  gap: 0.6rem;
+}
+
+button,
+.button-link {
+  border: 0;
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  font-size: 0.95rem;
+  text-decoration: none;
+  text-align: center;
+  cursor: pointer;
+  transition: transform 0.06s ease, background-color 0.2s ease;
+}
+
+button:active,
+.button-link:active {
+  transform: translateY(1px);
+}
+
+#copyButton,
+#refreshButton {
+  color: #fff;
+  background: var(--primary);
+}
+
+#copyButton:hover,
+#refreshButton:hover {
+  background: var(--primary-strong);
+}
+
+.button-success {
+  background: #c8b3ef !important;
+  color: #2b1e44 !important;
+}
+
+.button-link {
+  background: #2f2f35;
+  color: #fff;
+}
+
+.button-link:hover {
+  background: #1f1f24;
+}
+
+.note {
+  border-left: 4px solid #a787de;
+}
+
+.break-anywhere {
+  overflow-wrap: anywhere;
+}
+
+textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.84rem;
+}
+
+.hidden {
+  display: none;
+}
+
+.footer-note {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 0.25rem 0 0.5rem;
+}
+
+@media (min-width: 768px) {
+  .actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}

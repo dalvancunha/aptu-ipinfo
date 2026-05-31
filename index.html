@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aptu - Diagnóstico de Rede</title>
+    <meta
+      name="description"
+      content="Ferramenta da Aptu para diagnóstico rápido de conexão, IP externo, navegador e dispositivo."
+    />
+    <link rel="icon" type="image/x-icon" href="assets/favicon.ico" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="header card">
+        <img src="assets/logo-aptu.svg" alt="Logo Aptu" class="logo" />
+        <div>
+          <h1>Diagnóstico de Rede</h1>
+          <p class="subtitle">Ferramenta de apoio ao suporte técnico Aptu</p>
+        </div>
+      </header>
+
+      <section class="status card" aria-live="polite">
+        <h2>Status da consulta</h2>
+        <p id="statusMessage">Carregando diagnóstico...</p>
+      </section>
+
+      <section class="card">
+        <h2>Conexão</h2>
+        <p><strong>Protocolo:</strong> <span id="protocol">-</span></p>
+        <p><strong>Data/Hora:</strong> <span id="timestamp">-</span></p>
+      </section>
+
+      <section class="card">
+        <h2>Endereço IP</h2>
+        <p><strong>IP externo:</strong> <span id="ipAddress">-</span></p>
+      </section>
+
+      <section class="card">
+        <h2>Provedor do IP Externo</h2>
+        <p><strong>ISP:</strong> <span id="isp">-</span></p>
+        <p><strong>Organização:</strong> <span id="org">-</span></p>
+        <p><strong>ASN:</strong> <span id="asn">-</span></p>
+      </section>
+
+      <section class="card">
+        <h2>Localização Aproximada</h2>
+        <p><strong>Cidade:</strong> <span id="city">-</span></p>
+        <p><strong>Estado/Região:</strong> <span id="region">-</span></p>
+        <p><strong>País:</strong> <span id="country">-</span></p>
+      </section>
+
+      <section class="card">
+        <h2>Navegador e Sistema</h2>
+        <p><strong>Navegador:</strong> <span id="browserName">-</span></p>
+        <p><strong>Versão:</strong> <span id="browserVersion">-</span></p>
+        <p><strong>Sistema operacional:</strong> <span id="osName">-</span></p>
+        <p><strong>Tipo de dispositivo:</strong> <span id="deviceType">-</span></p>
+        <p><strong>Idioma principal:</strong> <span id="language">-</span></p>
+        <p><strong>Idiomas preferenciais:</strong> <span id="languages">-</span></p>
+        <p><strong>Plataforma:</strong> <span id="platform">-</span></p>
+        <p><strong>Vendor:</strong> <span id="vendor">-</span></p>
+        <p>
+          <strong>User Agent:</strong>
+          <span id="userAgent" class="break-anywhere">-</span>
+        </p>
+      </section>
+
+      <section class="card note">
+        <h2>Observação</h2>
+        <p>
+          Por segurança, navegadores modernos não permitem que sites acessem
+          diretamente o IP interno/local do dispositivo.
+        </p>
+      </section>
+
+      <section class="card note">
+        <h2>Privacidade</h2>
+        <p>
+          Estas informações são exibidas localmente para facilitar o suporte
+          técnico. Nesta versão estática, a Aptu não armazena esses dados em
+          banco de dados.
+        </p>
+      </section>
+
+      <section class="actions card">
+        <button id="copyButton" type="button">Copiar diagnóstico</button>
+        <button id="refreshButton" type="button">Atualizar diagnóstico</button>
+        <a
+          id="supportButton"
+          class="button-link"
+          href="#"
+          target="_blank"
+          rel="noopener noreferrer"
+          >Enviar diagnóstico pelo WhatsApp</a
+        >
+      </section>
+
+      <section class="copy-helper card hidden" id="manualCopySection">
+        <h2>Cópia manual</h2>
+        <p>
+          Seu navegador não permitiu cópia automática. Selecione o texto abaixo
+          e copie manualmente.
+        </p>
+        <textarea id="diagnosticText" rows="14" readonly></textarea>
+      </section>
+
+      <footer class="footer-note">
+        &copy; Aptu Tecnologia da Informação LTDA
+      </footer>
+    </main>
+
+    <script src="script.js"></script>
+  </body>
+</html>
