@@ -5,6 +5,7 @@ const IPIFY_IPV4_URL = 'https://api.ipify.org?format=json';
 const MIN_REFRESH_INTERVAL_MS = 60000;
 const MIN_ERROR_RETRY_INTERVAL_MS = 5000;
 const FETCH_TIMEOUT_MS = 8000;
+const DEBUG_MODE = new URLSearchParams(window.location.search).get('debug') === '1';
 // Referencia futura (nao usada como padrao em GitHub Pages por ser HTTP):
 // const LEGACY_IP_API_URL = 'http://ip-api.com/json/?fields=status,message,query,isp,org,as,country,regionName,city';
 // Nota: por ser front-end estatico, qualquer configuracao aqui e publica no navegador.
@@ -47,6 +48,7 @@ let lastRunSucceeded = false;
 let copyFeedbackTimeoutId = null;
 let refreshFeedbackTimeoutId = null;
 let actionToastTimeoutId = null;
+let debugPanelElement = null;
 
 function fallbackValue(value, emptyLabel = 'Não informado') {
   if (value === null || value === undefined || value === '') {
@@ -154,10 +156,16 @@ function normalizeIpapiResponse(data) {
 }
 
 async function fetchNormalizedIpInfo() {
+  return fetchNormalizedIpInfoWithDebug(() => {});
+}
+
+async function fetchNormalizedIpInfoWithDebug(debugLog) {
   let ipv4 = '';
   let lastError = null;
+  let fallbackUsed = 'Nenhum';
 
   try {
+    debugLog('Tentativa 1', 'Iniciada', 'Consulta inicial para descobrir o IP público preferencial.');
     const ipv4Lookup = await fetchWithTimeout(IPIFY_IPV4_URL, FETCH_TIMEOUT_MS, {
       method: 'GET',
       headers: { Accept: 'application/json' },
@@ -165,13 +173,18 @@ async function fetchNormalizedIpInfo() {
     if (ipv4Lookup.ok) {
       const ipv4Data = await ipv4Lookup.json();
       ipv4 = fallbackValue(ipv4Data.ip, '');
+      debugLog('Tentativa 1', 'Sucesso', `IP preferencial obtido (${ipv4 ? 'preenchido' : 'vazio'}).`);
+    } else {
+      debugLog('Tentativa 1', 'Falhou', `Resposta HTTP ${ipv4Lookup.status}.`);
     }
   } catch (error) {
     lastError = error;
+    debugLog('Tentativa 1', 'Erro', fallbackValue(error && error.message, 'Erro sem mensagem.'));
   }
 
   if (ipv4) {
     try {
+      debugLog('Tentativa 2', 'Iniciada', 'Consulta detalhada usando o IP preferencial.');
       const byIpUrl = IP_API_BY_IP_URL.replace('{ip}', encodeURIComponent(ipv4));
       const response = await fetchWithTimeout(byIpUrl, FETCH_TIMEOUT_MS, {
         method: 'GET',
@@ -182,30 +195,42 @@ async function fetchNormalizedIpInfo() {
         const normalized = normalizeIpapiResponse(data);
         if (normalized.status === 'success') {
           normalized.origin = 'Consulta IPv4';
-          return normalized;
+          fallbackUsed = 'Consulta preferencial (IPv4)';
+          debugLog('Tentativa 2', 'Sucesso', 'Dados completos obtidos com IP preferencial.');
+          return { normalized, fallbackUsed };
         }
+        debugLog('Tentativa 2', 'Falhou', 'Resposta recebida, mas sem dados válidos de IP.');
+      } else {
+        debugLog('Tentativa 2', 'Falhou', `Resposta HTTP ${response.status}.`);
       }
     } catch (error) {
       lastError = error;
+      debugLog('Tentativa 2', 'Erro', fallbackValue(error && error.message, 'Erro sem mensagem.'));
     }
   }
 
   try {
+    debugLog('Tentativa 3', 'Iniciada', 'Fallback automático de consulta.');
     const response = await fetchWithTimeout(IP_API_URL, FETCH_TIMEOUT_MS, {
       method: 'GET',
       headers: { Accept: 'application/json' },
     });
     if (!response.ok) {
+      debugLog('Tentativa 3', 'Falhou', `Resposta HTTP ${response.status}.`);
       throw new Error(`Resposta inválida da API de IP (${response.status}).`);
     }
     const data = await response.json();
     const normalized = normalizeIpapiResponse(data);
     if (normalized.status === 'success') {
       normalized.origin = detectIpType(normalized.ip) === 'IPv6' ? 'Consulta IPv6' : 'Consulta automática';
-      return normalized;
+      fallbackUsed = normalized.origin;
+      debugLog('Tentativa 3', 'Sucesso', `Dados obtidos via ${normalized.origin}.`);
+      return { normalized, fallbackUsed };
     }
+    debugLog('Tentativa 3', 'Falhou', 'Resposta recebida, mas sem dados válidos de IP.');
   } catch (error) {
     lastError = error;
+    debugLog('Tentativa 3', 'Erro', fallbackValue(error && error.message, 'Erro sem mensagem.'));
   }
 
   throw lastError || new Error('Falha temporária ao consultar IP.');
@@ -537,6 +562,83 @@ function getFriendlyFetchError(error) {
   );
 }
 
+async function getServiceWorkerDebugInfo() {
+  if (!('serviceWorker' in navigator)) {
+    return 'Service Worker não suportado.';
+  }
+
+  let activeScript = 'nenhum';
+  try {
+    const registration = await navigator.serviceWorker.getRegistration();
+    if (registration && registration.active && registration.active.scriptURL) {
+      const url = new URL(registration.active.scriptURL);
+      activeScript = `${url.pathname}${url.search}`;
+    }
+  } catch (_error) {
+    activeScript = 'indisponível (erro ao consultar registro)';
+  }
+
+  return navigator.serviceWorker.controller
+    ? `Ativo e controlando a página (${activeScript}).`
+    : `Registrado, mas ainda não controla esta página (${activeScript}).`;
+}
+
+function ensureDebugPanel() {
+  if (!DEBUG_MODE) return null;
+  if (debugPanelElement) return debugPanelElement;
+
+  const container = document.querySelector('.container');
+  if (!container) return null;
+
+  const section = document.createElement('section');
+  section.className = 'card note';
+  section.id = 'debugPanel';
+
+  const title = document.createElement('h2');
+  title.textContent = 'Modo técnico';
+  const description = document.createElement('p');
+  description.textContent = 'Ativo via ?debug=1. Dados técnicos locais para suporte.';
+  const pre = document.createElement('pre');
+  pre.id = 'debugContent';
+  pre.className = 'break-anywhere';
+  pre.style.whiteSpace = 'pre-wrap';
+  pre.style.marginTop = '0.75rem';
+  pre.textContent = 'Coletando informações técnicas...';
+
+  section.appendChild(title);
+  section.appendChild(description);
+  section.appendChild(pre);
+  container.appendChild(section);
+  debugPanelElement = section;
+  return debugPanelElement;
+}
+
+function renderDebugPanel(report) {
+  if (!DEBUG_MODE) return;
+  const panel = ensureDebugPanel();
+  if (!panel) return;
+  const pre = panel.querySelector('#debugContent');
+  if (!pre) return;
+
+  const lines = [
+    'Resumo técnico:',
+    `- Timeout configurado: ${report.timeoutMs} ms`,
+    `- Navegador detectado: ${report.browser}`,
+    `- Service Worker: ${report.serviceWorker}`,
+    `- Fallback usado: ${report.fallbackUsed}`,
+    '',
+    'Etapas:',
+    ...report.steps.map((step) => `- ${step}`),
+    '',
+    'Tentativas:',
+    ...report.attempts.map((attempt) => `- ${attempt}`),
+    '',
+    `Erro JS (último): ${report.lastJsError || 'Nenhum'}`,
+  ];
+
+  pre.textContent = lines.join('\n');
+}
+
 async function runDiagnostic(showRefreshFeedback = false) {
   const nowMs = Date.now();
   if (showRefreshFeedback && latestDiagnostic) {
@@ -570,10 +672,30 @@ async function runDiagnostic(showRefreshFeedback = false) {
   };
 
   const env = getEnvironmentInfo();
+  const debugReport = {
+    timeoutMs: FETCH_TIMEOUT_MS,
+    browser: `${fallbackValue(env.browserName, 'Não identificado')} ${fallbackValue(env.browserVersion, '')}`.trim(),
+    serviceWorker: 'Coletando...',
+    fallbackUsed: 'Nenhum',
+    steps: [],
+    attempts: [],
+    lastJsError: '',
+  };
+  debugReport.steps.push('Inicialização do diagnóstico concluída.');
+  debugReport.serviceWorker = await getServiceWorkerDebugInfo();
+  debugReport.steps.push('Estado do Service Worker coletado.');
   setStatus('Carregando diagnóstico...', 'neutral');
 
   try {
-    const normalizedIp = await fetchNormalizedIpInfo();
+    const debugLog = (name, status, detail) => {
+      debugReport.attempts.push(`${name}: ${status}${detail ? ` (${detail})` : ''}`);
+    };
+    const ipResult = DEBUG_MODE
+      ? await fetchNormalizedIpInfoWithDebug(debugLog)
+      : { normalized: await fetchNormalizedIpInfo(), fallbackUsed: 'Não informado' };
+    const normalizedIp = ipResult.normalized;
+    debugReport.fallbackUsed = fallbackValue(ipResult.fallbackUsed, 'Não informado');
+    debugReport.steps.push('Consulta de IP finalizada com sucesso.');
     latestDiagnostic = {
       connection,
       ip: {
@@ -608,6 +730,7 @@ async function runDiagnostic(showRefreshFeedback = false) {
     updateInterface(latestDiagnostic);
     elements.diagnosticText.value = buildDiagnosticText(latestDiagnostic);
     setStatus('Consulta realizada com sucesso.', 'success');
+    renderDebugPanel(debugReport);
     if (showRefreshFeedback) {
       showRefreshButtonFeedback();
     }
@@ -644,8 +767,11 @@ async function runDiagnostic(showRefreshFeedback = false) {
     latestDiagnostic.connection.statusText = friendlyError;
     lastRunAt = Date.now();
     lastRunSucceeded = false;
+    debugReport.lastJsError = fallbackValue(errorDetail, 'Erro sem mensagem.');
+    debugReport.steps.push('Consulta de IP finalizada com erro.');
     updateInterface(latestDiagnostic);
     elements.diagnosticText.value = buildDiagnosticText(latestDiagnostic);
+    renderDebugPanel(debugReport);
     setStatus(
       `${friendlyError}${errorDetail ? ` Detalhe técnico: ${errorDetail}` : ''}`,
       'error'

@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'aptu-ipinfo';
-const STATIC_CACHE_NAME = `${CACHE_PREFIX}-static-v1`;
+const STATIC_CACHE_NAME = `${CACHE_PREFIX}-static-v2`;
 
 const STATIC_ASSETS = [
   '/',
@@ -47,9 +47,8 @@ self.addEventListener('fetch', (event) => {
 
   const requestUrl = new URL(event.request.url);
 
-  // Nunca cachear APIs externas de diagnóstico IP.
+  // Nunca interceptar requisicoes externas (nao usar respondWith).
   if (requestUrl.origin !== self.location.origin) {
-    event.respondWith(fetch(event.request));
     return;
   }
 
