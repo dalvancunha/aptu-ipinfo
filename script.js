@@ -2,10 +2,11 @@ const IP_API_PROVIDER = 'ipapi';
 const IP_API_URL = 'https://ipapi.co/json/';
 const IP_API_BY_IP_URL = 'https://ipapi.co/{ip}/json/';
 const IPIFY_IPV4_URL = 'https://api.ipify.org?format=json';
+const IP_ENRICHMENT_URL = 'https://api.ipquery.io/{ip}';
 const MIN_REFRESH_INTERVAL_MS = 60000;
 const MIN_ERROR_RETRY_INTERVAL_MS = 5000;
 const FETCH_TIMEOUT_MS = 8000;
-const APP_VERSION = 'app-2026-05-31-sw-v4';
+const APP_VERSION = 'app-2026-05-31-detail-v5';
 const DEBUG_MODE = new URLSearchParams(window.location.search).get('debug') === '1';
 // Referencia futura (nao usada como padrao em GitHub Pages por ser HTTP):
 // const LEGACY_IP_API_URL = 'http://ip-api.com/json/?fields=status,message,query,isp,org,as,country,regionName,city';
@@ -156,104 +157,204 @@ function normalizeIpapiResponse(data) {
   };
 }
 
+function normalizeIpqueryResponse(data) {
+  const hasIp = Boolean(data && data.ip);
+  const isp = data && data.isp ? data.isp : {};
+  const location = data && data.location ? data.location : {};
+  const risk = data && data.risk ? data.risk : {};
+  const status = hasIp ? 'success' : 'error';
+
+  return {
+    status,
+    message: '',
+    ip: hasIp ? fallbackValue(data.ip, '') : '',
+    isp: fallbackValue(isp.isp || isp.org, ''),
+    org: fallbackValue(isp.org || isp.isp, ''),
+    asn: fallbackValue(isp.asn, ''),
+    city: fallbackValue(location.city, ''),
+    region: fallbackValue(location.state, ''),
+    country: fallbackValue(location.country, ''),
+    raw: {
+      org: isp.org || '',
+      network: isp.isp || '',
+      asn: isp.asn || '',
+      as_name: isp.org || '',
+      is_vpn: risk.is_vpn,
+      is_proxy: risk.is_proxy,
+      is_tor: risk.is_tor,
+    },
+  };
+}
+
+function buildPartialIpResult(ip, lastError) {
+  return {
+    normalized: {
+      status: 'partial',
+      message: lastError && lastError.message ? String(lastError.message) : '',
+      ip,
+      isp: 'Não informado',
+      org: 'Não informado',
+      asn: 'Não informado',
+      city: 'Não informado',
+      region: 'Não informado',
+      country: 'Não informado',
+      origin: 'Consulta parcial (IP identificado)',
+      raw: {},
+    },
+    fallbackUsed: 'IP básico identificado; detalhes indisponíveis',
+    isPartial: true,
+    partialError: lastError || null,
+  };
+}
+
+function classifyFetchIssue(error) {
+  const message = error && error.message ? String(error.message) : '';
+  const name = error && error.name ? String(error.name) : '';
+
+  if (/AbortError|aborted|timeout/i.test(`${name} ${message}`)) {
+    return 'timeout';
+  }
+
+  if (/Resposta HTTP|HTTP/i.test(message)) {
+    return 'http';
+  }
+
+  if (/resposta inválida|json|JSON|dados válidos/i.test(message)) {
+    return 'invalid';
+  }
+
+  if (/Failed to fetch|NetworkError|Load failed|fetch/i.test(message)) {
+    return 'network-cors';
+  }
+
+  return 'unknown';
+}
+
+function describeFetchIssue(error) {
+  const issue = classifyFetchIssue(error);
+  const message = error && error.message ? String(error.message) : 'Erro sem mensagem.';
+
+  if (issue === 'timeout') {
+    return `timeout (${message})`;
+  }
+  if (issue === 'http') {
+    return `resposta HTTP não OK (${message})`;
+  }
+  if (issue === 'invalid') {
+    return `resposta inválida (${message})`;
+  }
+  if (issue === 'network-cors') {
+    return `falha de rede/CORS (${message})`;
+  }
+  return `erro não classificado (${message})`;
+}
+
+async function fetchJsonAttempt(url, timeoutMs, options = {}) {
+  const response = await fetchWithTimeout(url, timeoutMs, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+    ...options,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Resposta HTTP ${response.status}.`);
+  }
+
+  try {
+    return await response.json();
+  } catch (_error) {
+    throw new Error('Resposta inválida: JSON não pôde ser lido.');
+  }
+}
+
+async function runEnrichmentAttempt({ label, url, normalize, origin, fallbackUsed, debugLog }) {
+  debugLog(label, 'Iniciada', 'Consulta de enriquecimento de dados.');
+  const data = await fetchJsonAttempt(url, FETCH_TIMEOUT_MS);
+  const normalized = normalize(data);
+
+  if (normalized.status !== 'success') {
+    throw new Error('Resposta inválida: sem dados válidos de IP.');
+  }
+
+  normalized.origin = origin;
+  debugLog(label, 'Sucesso', 'Dados detalhados obtidos.');
+  return { normalized, fallbackUsed, isPartial: false, partialError: null };
+}
+
 async function fetchNormalizedIpInfo() {
   const result = await fetchNormalizedIpInfoWithDebug(() => {});
   return result.normalized;
 }
 
-async function fetchNormalizedIpInfoWithDebug(debugLog) {
+async function fetchNormalizedIpInfoWithDebug(debugLog, onBasicIp = () => {}) {
   let discoveredIp = '';
   let lastError = null;
-  let fallbackUsed = 'Nenhum';
 
   try {
     debugLog('Tentativa 1', 'Iniciada', 'Consulta inicial para descobrir o IP público preferencial.');
-    const ipv4Lookup = await fetchWithTimeout(IPIFY_IPV4_URL, FETCH_TIMEOUT_MS, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-    });
-    if (ipv4Lookup.ok) {
-      const ipv4Data = await ipv4Lookup.json();
-      discoveredIp = fallbackValue(ipv4Data.ip, '');
-      const discoveredType = detectIpType(discoveredIp);
-      debugLog(
-        'Tentativa 1',
-        'Sucesso',
-        `IP preferencial obtido (${discoveredIp ? 'preenchido' : 'vazio'}; tipo detectado: ${discoveredType}).`
-      );
-    } else {
-      debugLog('Tentativa 1', 'Falhou', `Resposta HTTP ${ipv4Lookup.status}.`);
+    const ipv4Data = await fetchJsonAttempt(IPIFY_IPV4_URL, FETCH_TIMEOUT_MS);
+    discoveredIp = fallbackValue(ipv4Data.ip, '');
+    const discoveredType = detectIpType(discoveredIp);
+    if (!discoveredIp) {
+      throw new Error('Resposta inválida: IP preferencial vazio.');
     }
+    debugLog(
+      'Tentativa 1',
+      'Sucesso',
+      `IP preferencial obtido (${discoveredIp ? 'preenchido' : 'vazio'}; tipo detectado: ${discoveredType}).`
+    );
+    onBasicIp(discoveredIp);
   } catch (error) {
     lastError = error;
-    debugLog('Tentativa 1', 'Erro', fallbackValue(error && error.message, 'Erro sem mensagem.'));
+    debugLog('Tentativa 1', 'Erro', describeFetchIssue(error));
   }
 
   if (discoveredIp) {
-    try {
-      debugLog('Tentativa 2', 'Iniciada', 'Consulta detalhada usando o IP preferencial.');
-      const byIpUrl = IP_API_BY_IP_URL.replace('{ip}', encodeURIComponent(discoveredIp));
-      const response = await fetchWithTimeout(byIpUrl, FETCH_TIMEOUT_MS, {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const normalized = normalizeIpapiResponse(data);
-        if (normalized.status === 'success') {
-          normalized.origin = 'Consulta IPv4';
-          fallbackUsed = 'Consulta preferencial (IPv4)';
-          debugLog('Tentativa 2', 'Sucesso', 'Dados completos obtidos com IP preferencial.');
-          return { normalized, fallbackUsed };
-        }
-        debugLog('Tentativa 2', 'Falhou', 'Resposta recebida, mas sem dados válidos de IP.');
-      } else {
-        debugLog('Tentativa 2', 'Falhou', `Resposta HTTP ${response.status}.`);
-      }
-    } catch (error) {
-      lastError = error;
-      const errorMessage = fallbackValue(error && error.message, 'Erro sem mensagem.');
-      debugLog('Tentativa 2', 'Erro', errorMessage);
-      if (/Failed to fetch|NetworkError|Load failed/i.test(errorMessage)) {
-        debugLog(
-          'Tentativa 2',
-          'Análise',
-          'Falha de rede/camada de segurança no navegador (CORS, bloqueio de privacidade, DNS, firewall ou instabilidade).'
-        );
+    const enrichmentAttempts = [
+      {
+        label: 'Tentativa 2',
+        url: IP_ENRICHMENT_URL.replace('{ip}', encodeURIComponent(discoveredIp)),
+        normalize: normalizeIpqueryResponse,
+        origin: 'Consulta IPv4',
+        fallbackUsed: 'Consulta detalhada principal',
+      },
+      {
+        label: 'Tentativa 3',
+        url: IP_API_BY_IP_URL.replace('{ip}', encodeURIComponent(discoveredIp)),
+        normalize: normalizeIpapiResponse,
+        origin: 'Consulta IPv4',
+        fallbackUsed: 'Consulta detalhada secundária',
+      },
+    ];
+
+    for (const attempt of enrichmentAttempts) {
+      try {
+        return await runEnrichmentAttempt({ ...attempt, debugLog });
+      } catch (error) {
+        lastError = error;
+        debugLog(attempt.label, 'Erro', describeFetchIssue(error));
       }
     }
   }
 
   try {
-    debugLog('Tentativa 3', 'Iniciada', 'Fallback automático de consulta.');
-    const response = await fetchWithTimeout(IP_API_URL, FETCH_TIMEOUT_MS, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-    });
-    if (!response.ok) {
-      debugLog('Tentativa 3', 'Falhou', `Resposta HTTP ${response.status}.`);
-      throw new Error(`Resposta inválida da API de IP (${response.status}).`);
-    }
-    const data = await response.json();
+    debugLog('Tentativa 4', 'Iniciada', 'Fallback automático de consulta.');
+    const data = await fetchJsonAttempt(IP_API_URL, FETCH_TIMEOUT_MS);
     const normalized = normalizeIpapiResponse(data);
     if (normalized.status === 'success') {
       normalized.origin = detectIpType(normalized.ip) === 'IPv6' ? 'Consulta IPv6' : 'Consulta automática';
-      fallbackUsed = normalized.origin;
-      debugLog('Tentativa 3', 'Sucesso', `Dados obtidos via ${normalized.origin}.`);
-      return { normalized, fallbackUsed };
+      debugLog('Tentativa 4', 'Sucesso', `Dados obtidos via ${normalized.origin}.`);
+      return {
+        normalized,
+        fallbackUsed: normalized.origin,
+        isPartial: false,
+        partialError: null,
+      };
     }
-    debugLog('Tentativa 3', 'Falhou', 'Resposta recebida, mas sem dados válidos de IP.');
+    throw new Error('Resposta inválida: sem dados válidos de IP.');
   } catch (error) {
     lastError = error;
-    const errorMessage = fallbackValue(error && error.message, 'Erro sem mensagem.');
-    debugLog('Tentativa 3', 'Erro', errorMessage);
-    if (/Failed to fetch|NetworkError|Load failed/i.test(errorMessage)) {
-      debugLog(
-        'Tentativa 3',
-        'Análise',
-        'Falha de rede/camada de segurança no navegador (CORS, bloqueio de privacidade, DNS, firewall ou instabilidade).'
-      );
-    }
+    debugLog('Tentativa 4', 'Erro', describeFetchIssue(error));
   }
 
   if (discoveredIp) {
@@ -262,24 +363,7 @@ async function fetchNormalizedIpInfoWithDebug(debugLog) {
       'Sucesso',
       'IP básico preservado mesmo sem dados detalhados. Mantendo diagnóstico parcial amigável.'
     );
-    return {
-      normalized: {
-        status: 'partial',
-        message: lastError && lastError.message ? String(lastError.message) : '',
-        ip: discoveredIp,
-        isp: 'Não informado',
-        org: 'Não informado',
-        asn: 'Não informado',
-        city: 'Não informado',
-        region: 'Não informado',
-        country: 'Não informado',
-        origin: 'Consulta parcial (IP identificado)',
-        raw: {},
-      },
-      fallbackUsed: 'IP básico identificado; detalhes indisponíveis',
-      isPartial: true,
-      partialError: lastError || null,
-    };
+    return buildPartialIpResult(discoveredIp, lastError);
   }
 
   throw lastError || new Error('Falha temporária ao consultar IP.');
@@ -305,6 +389,14 @@ function detectIpType(ipValue) {
 
 function detectProxyRelayVpnRisk(model) {
   const raw = model.ip.raw || {};
+  if (raw.is_vpn || raw.is_proxy || raw.is_tor) {
+    return {
+      level: 'warning',
+      text:
+        'Possível proxy, relay de privacidade, CDN ou VPN detectado. O IP exibido pode não ser o IP real da rede do cliente.',
+    };
+  }
+
   const text = [
     model.ip.isp,
     model.ip.org,
@@ -689,6 +781,42 @@ function renderDebugPanel(report) {
   pre.textContent = lines.join('\n');
 }
 
+function buildDiagnosticModel(connection, env, normalizedIp, isPartial = false) {
+  const model = {
+    connection,
+    ip: {
+      query: normalizedIp.ip,
+      isp: normalizedIp.isp || normalizedIp.org,
+      org: normalizedIp.org,
+      as: normalizedIp.asn,
+      city: normalizedIp.city,
+      regionName: normalizedIp.region,
+      country: normalizedIp.country,
+      type: detectIpType(normalizedIp.ip),
+      origin: fallbackValue(normalizedIp.origin, 'Não informado'),
+      localIp: 'Não informado / não disponível pelo navegador',
+      proxyDetected: 'Não',
+      proxyWarning: '',
+      status: normalizedIp.status,
+      message: normalizedIp.message,
+      raw: normalizedIp.raw,
+    },
+    env,
+  };
+
+  if (isPartial) {
+    model.ip.proxyDetected = 'Não validado';
+    model.ip.proxyWarning =
+      'Não foi possível validar possível uso de proxy, relay, CDN ou VPN no momento.';
+    return model;
+  }
+
+  const proxyResult = detectProxyRelayVpnRisk(model);
+  model.ip.proxyDetected = proxyResult.level === 'warning' ? 'Sim' : 'Não';
+  model.ip.proxyWarning = proxyResult.text;
+  return model;
+}
+
 async function runDiagnostic(showRefreshFeedback = false) {
   const nowMs = Date.now();
   if (showRefreshFeedback && latestDiagnostic) {
@@ -741,9 +869,18 @@ async function runDiagnostic(showRefreshFeedback = false) {
     const debugLog = (name, status, detail) => {
       debugReport.attempts.push(`${name}: ${status}${detail ? ` (${detail})` : ''}`);
     };
-    const ipResult = DEBUG_MODE
-      ? await fetchNormalizedIpInfoWithDebug(debugLog)
-      : { normalized: await fetchNormalizedIpInfo(), fallbackUsed: 'Não informado', isPartial: false, partialError: null };
+    const showBasicIp = (ip) => {
+      const partialResult = buildPartialIpResult(ip, null);
+      const partialConnection = {
+        ...connection,
+        statusText: 'IP externo identificado. Buscando detalhes adicionais...',
+      };
+      latestDiagnostic = buildDiagnosticModel(partialConnection, env, partialResult.normalized, true);
+      updateInterface(latestDiagnostic);
+      elements.diagnosticText.value = buildDiagnosticText(latestDiagnostic);
+      setStatus(partialConnection.statusText, 'neutral');
+    };
+    const ipResult = await fetchNormalizedIpInfoWithDebug(debugLog, showBasicIp);
     const normalizedIp = ipResult.normalized;
     debugReport.fallbackUsed = fallbackValue(ipResult.fallbackUsed, 'Não informado');
     const partialErrorMessage =
@@ -754,36 +891,7 @@ async function runDiagnostic(showRefreshFeedback = false) {
         ? 'Consulta de IP finalizada parcialmente (IP básico disponível; detalhes indisponíveis).'
         : 'Consulta de IP finalizada com sucesso.'
     );
-    latestDiagnostic = {
-      connection,
-      ip: {
-        query: normalizedIp.ip,
-        isp: normalizedIp.isp || normalizedIp.org,
-        org: normalizedIp.org,
-        as: normalizedIp.asn,
-        city: normalizedIp.city,
-        regionName: normalizedIp.region,
-        country: normalizedIp.country,
-        type: detectIpType(normalizedIp.ip),
-        origin: fallbackValue(normalizedIp.origin, 'Não informado'),
-        localIp: 'Não informado / não disponível pelo navegador',
-        proxyDetected: 'Não',
-        proxyWarning: '',
-        status: normalizedIp.status,
-        message: normalizedIp.message,
-        raw: normalizedIp.raw,
-      },
-      env,
-    };
-    const proxyResult = detectProxyRelayVpnRisk(latestDiagnostic);
-    if (ipResult.isPartial) {
-      latestDiagnostic.ip.proxyDetected = 'Não validado';
-      latestDiagnostic.ip.proxyWarning =
-        'Não foi possível validar possível uso de proxy, relay, CDN ou VPN no momento.';
-    } else {
-      latestDiagnostic.ip.proxyDetected = proxyResult.level === 'warning' ? 'Sim' : 'Não';
-      latestDiagnostic.ip.proxyWarning = proxyResult.text;
-    }
+    latestDiagnostic = buildDiagnosticModel(connection, env, normalizedIp, ipResult.isPartial);
     const safariGuidance = getSafariPrivacyGuidance(latestDiagnostic);
     if (safariGuidance) {
       latestDiagnostic.ip.proxyWarning = `${latestDiagnostic.ip.proxyWarning} ${safariGuidance}`;

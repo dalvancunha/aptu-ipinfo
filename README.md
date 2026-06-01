@@ -1,4 +1,4 @@
-# aptu-ipinfo
+# Diagnóstico de Rede Aptu
 
 Página estática de diagnóstico de rede e ambiente do navegador para suporte técnico da Aptu.
 
