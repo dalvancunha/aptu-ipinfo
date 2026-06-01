@@ -6,7 +6,7 @@ const IP_ENRICHMENT_URL = 'https://api.ipquery.io/{ip}';
 const MIN_REFRESH_INTERVAL_MS = 60000;
 const MIN_ERROR_RETRY_INTERVAL_MS = 5000;
 const FETCH_TIMEOUT_MS = 8000;
-const APP_VERSION = 'app-2026-05-31-detail-v5';
+const APP_VERSION = 'app-2026-05-31-debug-copy-v6';
 const DEBUG_MODE = new URLSearchParams(window.location.search).get('debug') === '1';
 // Referencia futura (nao usada como padrao em GitHub Pages por ser HTTP):
 // const LEGACY_IP_API_URL = 'http://ip-api.com/json/?fields=status,message,query,isp,org,as,country,regionName,city';
@@ -51,6 +51,7 @@ let copyFeedbackTimeoutId = null;
 let refreshFeedbackTimeoutId = null;
 let actionToastTimeoutId = null;
 let debugPanelElement = null;
+let latestDebugReport = null;
 
 function fallbackValue(value, emptyLabel = 'Não informado') {
   if (value === null || value === undefined || value === '') {
@@ -140,7 +141,7 @@ function normalizeIpapiResponse(data) {
   const status = hasIp ? 'success' : 'error';
   const message =
     data && data.error
-      ? fallbackValue(data.reason || data.message, 'Erro ao consultar API de IP.')
+      ? fallbackValue(data.reason || data.message, 'Erro ao consultar serviço de diagnóstico.')
       : '';
 
   return {
@@ -247,6 +248,15 @@ function describeFetchIssue(error) {
     return `falha de rede/CORS (${message})`;
   }
   return `erro não classificado (${message})`;
+}
+
+function getFetchIssueLabel(error) {
+  const issue = classifyFetchIssue(error);
+  if (issue === 'timeout') return 'timeout';
+  if (issue === 'http') return 'HTTP não OK';
+  if (issue === 'invalid') return 'resposta inválida';
+  if (issue === 'network-cors') return 'falha de rede/CORS';
+  return 'erro não classificado';
 }
 
 async function fetchJsonAttempt(url, timeoutMs, options = {}) {
@@ -543,8 +553,37 @@ function buildDiagnosticText(model) {
   ].join('\n');
 }
 
-function buildWhatsAppDiagnosticText(model) {
+function buildTechnicalDebugText(report) {
+  if (!DEBUG_MODE || !report) return '';
+
   return [
+    '',
+    'Modo técnico:',
+    `Versão do app: ${fallbackValue(report.appVersion, 'Não informado')}`,
+    `Timeout configurado: ${fallbackValue(report.timeoutMs, 'Não informado')} ms`,
+    `Navegador detectado: ${fallbackValue(report.browser, 'Não identificado')}`,
+    `Service Worker: ${fallbackValue(report.serviceWorker, 'Não informado')}`,
+    `Fallback usado: ${fallbackValue(report.fallbackUsed, 'Nenhum')}`,
+    '',
+    'Etapas executadas:',
+    ...(report.steps || []).map((step) => `- ${step}`),
+    '',
+    'Tentativas e resultados:',
+    ...(report.attempts || []).map((attempt) => `- ${attempt}`),
+    '',
+    `Último erro JS: ${fallbackValue(report.lastJsError, 'Nenhum')}`,
+    `Classificação de erro: ${fallbackValue(report.lastErrorClass, 'Nenhuma')}`,
+  ].join('\n');
+}
+
+function buildShareDiagnosticText(model) {
+  const publicText = buildDiagnosticText(model);
+  const technicalText = buildTechnicalDebugText(latestDebugReport);
+  return technicalText ? `${publicText}\n${technicalText}` : publicText;
+}
+
+function buildWhatsAppDiagnosticText(model) {
+  const publicText = [
     '*Diagnóstico de Rede - Aptu*',
     '',
     `*Status da consulta:* ${fallbackValue(model.connection.statusText, 'Não informado')}`,
@@ -579,6 +618,11 @@ function buildWhatsAppDiagnosticText(model) {
     `*Plataforma:* ${fallbackValue(model.env.platform, 'Não informado')}`,
     `*Vendor:* ${fallbackValue(model.env.vendor, 'Não informado')}`,
   ].join('\n');
+
+  const technicalText = buildTechnicalDebugText(latestDebugReport);
+  if (!technicalText) return publicText;
+
+  return `${publicText}\n${technicalText.replace('Modo técnico:', '*Modo técnico:*')}`;
 }
 
 function buildWhatsAppUrl(diagnosticText) {
@@ -658,7 +702,7 @@ async function copyDiagnosticText() {
     return;
   }
 
-  const diagnosticText = buildDiagnosticText(latestDiagnostic);
+  const diagnosticText = buildShareDiagnosticText(latestDiagnostic);
   elements.diagnosticText.value = diagnosticText;
 
   if (navigator.clipboard && window.isSecureContext) {
@@ -776,6 +820,7 @@ function renderDebugPanel(report) {
     ...report.attempts.map((attempt) => `- ${attempt}`),
     '',
     `Erro JS (último): ${report.lastJsError || 'Nenhum'}`,
+    `Classificação de erro: ${report.lastErrorClass || 'Nenhuma'}`,
   ];
 
   pre.textContent = lines.join('\n');
@@ -859,8 +904,10 @@ async function runDiagnostic(showRefreshFeedback = false) {
     steps: [],
     attempts: [],
     lastJsError: '',
+    lastErrorClass: '',
   };
   debugReport.steps.push('Inicialização do diagnóstico concluída.');
+  latestDebugReport = DEBUG_MODE ? debugReport : null;
   debugReport.serviceWorker = await getServiceWorkerDebugInfo();
   debugReport.steps.push('Estado do Service Worker coletado.');
   setStatus('Carregando diagnóstico...', 'neutral');
@@ -886,6 +933,7 @@ async function runDiagnostic(showRefreshFeedback = false) {
     const partialErrorMessage =
       ipResult.partialError && ipResult.partialError.message ? String(ipResult.partialError.message) : '';
     debugReport.lastJsError = partialErrorMessage;
+    debugReport.lastErrorClass = ipResult.partialError ? getFetchIssueLabel(ipResult.partialError) : '';
     debugReport.steps.push(
       ipResult.isPartial
         ? 'Consulta de IP finalizada parcialmente (IP básico disponível; detalhes indisponíveis).'
@@ -909,6 +957,7 @@ async function runDiagnostic(showRefreshFeedback = false) {
         : 'Consulta realizada com sucesso.',
       ipResult.isPartial ? 'error' : 'success'
     );
+    latestDebugReport = debugReport;
     renderDebugPanel(debugReport);
     if (showRefreshFeedback) {
       showRefreshButtonFeedback();
@@ -947,9 +996,11 @@ async function runDiagnostic(showRefreshFeedback = false) {
     lastRunAt = Date.now();
     lastRunSucceeded = false;
     debugReport.lastJsError = fallbackValue(errorDetail, 'Erro sem mensagem.');
+    debugReport.lastErrorClass = getFetchIssueLabel(error);
     debugReport.steps.push('Consulta de IP finalizada com erro.');
     updateInterface(latestDiagnostic);
     elements.diagnosticText.value = buildDiagnosticText(latestDiagnostic);
+    latestDebugReport = debugReport;
     renderDebugPanel(debugReport);
     setStatus(
       `${friendlyError}${errorDetail ? ` Detalhe técnico: ${errorDetail}` : ''}`,

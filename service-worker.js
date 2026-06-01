@@ -1,6 +1,6 @@
 const CACHE_PREFIX = 'aptu-ipinfo';
-const CACHE_VERSION = 'v5';
-const APP_VERSION = 'app-2026-05-31-detail-v5';
+const CACHE_VERSION = 'v6';
+const APP_VERSION = 'app-2026-05-31-debug-copy-v6';
 const STATIC_CACHE_NAME = `${CACHE_PREFIX}-static-${CACHE_VERSION}`;
 
 const STATIC_ASSETS = [
